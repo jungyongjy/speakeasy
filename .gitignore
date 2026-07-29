@@ -1,0 +1,19 @@
+# Claude Code / local tooling
+.claude/
+
+# Vercel
+.vercel/
+
+# Secrets (never commit your API key)
+.env
+.env.*
+*.key
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+
+# Node (not used, but just in case)
+node_modules/
