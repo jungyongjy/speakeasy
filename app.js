@@ -4,7 +4,11 @@
 const cfg = {
   apiKey: localStorage.getItem("speakeasy_key") || sessionStorage.getItem("speakeasy_key") || "",
   rememberKey: localStorage.getItem("speakeasy_remember") !== "0",
-  model: (function(m){ return (!m||/^gemini-(1|2)\./.test(m))?"gemini-3.5-flash":m; })(localStorage.getItem("speakeasy_model")),
+  model: (function(m){ return (!m||/^gemini-(1\.|2\.0)/.test(m)||m==="gemini-3-flash")?"gemini-2.5-flash":m; })(localStorage.getItem("speakeasy_model")),
+  dailyCap: +(localStorage.getItem("speakeasy_dailyCap")||1500),
+  provider: localStorage.getItem("speakeasy_provider") || "gemini",
+  orKey: localStorage.getItem("speakeasy_orKey") || sessionStorage.getItem("speakeasy_orKey") || "",
+  orModel: localStorage.getItem("speakeasy_orModel") || "",
   tts: localStorage.getItem("speakeasy_tts") !== "0",
   audio: localStorage.getItem("speakeasy_audio") !== "0",
   whisper: localStorage.getItem("speakeasy_whisper") !== "0",
@@ -78,7 +82,7 @@ function addMsg(who, text){
   return d.querySelector(".body");
 }
 function bumpUsage(){ const day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} if(u.date!==day) u={date:day,count:0}; u.count=(u.count||0)+1; localStorage.setItem("speakeasy_usage",JSON.stringify(u)); renderUsage(); }
-function renderUsage(){ const el=$("usage"); if(!el) return; const cap=1500, day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} const n=(u.date===day)?(u.count||0):0; el.textContent="API "+n+"/"+cap; el.style.color=n>cap*0.9?"var(--c-danger)":(n>cap*0.7?"var(--c-amber)":"var(--c-ink-3)"); el.title="Approx Gemini free-tier usage today (~"+cap+" requests/day, resets daily Pacific time). Counted locally on this device."; }
+function renderUsage(){ const el=$("usage"); if(!el) return; const cap=cfg.dailyCap||1500, day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} const n=(u.date===day)?(u.count||0):0; el.textContent="API "+n+"/"+cap; el.style.color=n>cap*0.9?"var(--c-danger)":(n>cap*0.7?"var(--c-amber)":"var(--c-ink-3)"); el.title="Approx Gemini free-tier usage today (~"+cap+" requests/day, resets daily Pacific time). Counted locally on this device."; }
 
 /* ── Icons (inline SVG, no emoji) ── */
 const ICONS={
@@ -169,15 +173,100 @@ async function callGemini(onDelta){
   return full;
 }
 
+/* ── OpenRouter (OpenAI-compatible) ── */
+function activeKey(){ return cfg.provider==="openrouter"?cfg.orKey:cfg.apiKey; }
+function callModel(onDelta){ return cfg.provider==="openrouter"?callOpenRouter(onDelta):callGemini(onDelta); }
+async function callOpenRouter(onDelta){
+  if(!cfg.orKey){ showBanner("Add your OpenRouter API key in Settings to use OpenRouter.",true); return null; }
+  if(!cfg.orModel){ showBanner("Pick an OpenRouter model in Settings (an id ending in :free stays free).",true); return null; }
+  const url="https://openrouter.ai/api/v1/chat/completions";
+  const msgs=[{role:"system",content:SPEAKEASY_PROMPT}].concat(history.map(h=>({role:h.role==="model"?"assistant":"user",content:h.text})));
+  const body={ model:cfg.orModel, messages:msgs, stream:true, temperature:0.75, max_tokens:2048 };
+  let res;
+  try{ res=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+cfg.orKey,"X-Title":"SpeakEasy"},body:JSON.stringify(body)}); }
+  catch(e){ showBanner("Network error reaching OpenRouter. ("+e.message+")",true); return null; }
+  if(!res.ok){
+    let d=""; try{ const j=await res.json(); d=j.error&&j.error.message?j.error.message:JSON.stringify(j); }catch(e){ d=res.statusText; }
+    if(res.status===429) showBanner("OpenRouter rate limit (429). Free models allow ~20/min and 50/day (1000/day after a one-time $10 credit). Wait a moment or check the meter. "+d,true);
+    else if(res.status===401) showBanner("OpenRouter key rejected (401). Re-check it in Settings. "+d,true);
+    else if(res.status===402) showBanner("This model needs paid credits (402). Pick a model whose id ends in ':free', or add credits. "+d,true);
+    else showBanner("OpenRouter error "+res.status+": "+d,true);
+    return null;
+  }
+  hideBanner(); bumpUsage();
+  let full="";
+  try{
+    const reader=res.body.getReader(), decoder=new TextDecoder(); let buf="";
+    while(true){ const {done,value}=await reader.read(); if(done) break; buf+=decoder.decode(value,{stream:true});
+      let nl; while((nl=buf.indexOf("\n"))>=0){ const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+        if(!line.startsWith("data:")) continue; const js=line.slice(5).trim(); if(!js||js==="[DONE]") continue;
+        try{ const obj=JSON.parse(js); const ch=obj.choices&&obj.choices[0];
+          const t=ch&&ch.delta&&ch.delta.content?ch.delta.content:""; if(t){ full+=t; if(onDelta) onDelta(full); }
+        }catch(e){}
+      }
+    }
+  }catch(e){ if(!full){ showBanner("Streaming error: "+e.message,true); return null; } }
+  full=full.trim();
+  if(!full){ showBanner("The model returned no answer. Try another model or rephrase.",true); return null; }
+  return full;
+}
+function storeORKey(key, remember){
+  cfg.orKey=key;
+  if(remember){ localStorage.setItem("speakeasy_orKey",key); sessionStorage.removeItem("speakeasy_orKey"); }
+  else { sessionStorage.setItem("speakeasy_orKey",key); localStorage.removeItem("speakeasy_orKey"); }
+}
+async function testORKey(key){
+  if(!key) return {ok:false,msg:"Paste a key first."};
+  try{
+    const r=await fetch("https://openrouter.ai/api/v1/key",{headers:{"Authorization":"Bearer "+key}});
+    if(r.ok) return {ok:true,msg:"Key works. You are good to go."};
+    let d="HTTP "+r.status; try{ const j=await r.json(); if(j.error&&j.error.message) d=j.error.message; }catch(e){}
+    return {ok:false,msg:"Key rejected: "+d};
+  }catch(e){ return {ok:false,msg:"Network error: "+e.message}; }
+}
+async function fetchORModels(){
+  const dl=$("orModelList"); if(!dl||dl.dataset.loaded) return;
+  try{
+    const r=await fetch("https://openrouter.ai/api/v1/models"); if(!r.ok) return;
+    const j=await r.json();
+    const free=(j.data||[]).filter(m=>{ const id=m.id||""; if(!/:free$/.test(id)) return false;
+      const a=m.architecture||{}; const outs=a.output_modalities||(a.modality?[a.modality]:null);
+      if(outs && !outs.some(x=>/text/i.test(x))) return false;
+      return true; });
+    free.sort((a,b)=>(a.id||"").localeCompare(b.id||""));
+    dl.innerHTML=free.slice(0,80).map(m=>'<option value="'+esc(m.id)+'">'+esc(m.name||m.id)+'</option>').join("");
+    dl.dataset.loaded="1";
+    const inp=$("orModel");
+    if(inp && !inp.value && free.length){ const pref=free.find(m=>/(llama|qwen|mistral|gemma|glm|kimi|deepseek)/i.test(m.id)); inp.value=(pref||free[0]).id; }
+  }catch(e){}
+}
+function updateProviderUI(){
+  const p=$("provider")?$("provider").value:cfg.provider;
+  const g=$("geminiFields"), o=$("orFields");
+  if(g) g.style.display=(p==="openrouter")?"none":"";
+  if(o) o.style.display=(p==="openrouter")?"":"none";
+  if(p==="openrouter") fetchORModels();
+}
+
+function stripDebrief(t){
+  if(!t) return t;
+  const m=t.match(/\*\*\s*Score\s*\*\*|(?:^|\n)\s*Score\b/i);
+  if(!m) return t;
+  const i=m.index;
+  const sep=t.indexOf("***", i);
+  if(sep>=0) return (t.slice(0,i)+t.slice(sep+3)).replace(/\n{3,}/g,"\n\n").trim();
+  return t.slice(0,i).trim();
+}
 async function speakeasyTurn(){
   if(busy) return; busy=true; setBusy(true); setStatus("thinking…");
+  const cmd=lastUserWasCommand;
   const bodyEl=addMsg("speakeasy","");
-  const text=await callGemini((t)=>{ bodyEl.innerHTML=mdLite(t); logEl.scrollTop=logEl.scrollHeight; });
+  const raw=await callModel((t)=>{ bodyEl.innerHTML=mdLite(cmd?stripDebrief(t):t); logEl.scrollTop=logEl.scrollHeight; });
   setStatus("");
-  if(text){
-    bodyEl.innerHTML=mdLite(text); history.push({role:"model",text}); speak(text);
-    const sc=parseScores(text);
-    if(sc && !lastUserWasCommand){ recordProgress(sc); sessionLog.push({q:lastQuestionText,a:lastAnswer,debrief:text,m:lastMeasured}); $("drawer").classList.add("open"); switchTab("turn"); }
+  if(raw){
+    const text=cmd?stripDebrief(raw):raw;
+    bodyEl.innerHTML=mdLite(text)||"..."; history.push({role:"model",text}); speak(text);
+    if(!cmd){ const sc=parseScores(text); if(sc){ recordProgress(sc); sessionLog.push({q:lastQuestionText,a:lastAnswer,debrief:text,m:lastMeasured}); $("drawer").classList.add("open"); switchTab("turn"); } }
     lastQuestionText=text;
   } else { const msg=bodyEl.parentElement; if(msg&&msg.parentElement) msg.parentElement.removeChild(msg); }
   busy=false; setBusy(false);
@@ -586,7 +675,7 @@ $("micBtn").addEventListener("click",()=>{ recognizing?stopSpeaking():startSpeak
 
 /* ── Buttons ── */
 function enableAfterStart(){ if(!history.length) return; ["micBtn","newBtn","retryBtn","sendBtn","typeInput","reportBtn"].forEach(id=>{$(id).disabled=false;}); $("startBtn").disabled=true; }
-$("startBtn").addEventListener("click",async()=>{ if(!cfg.apiKey){ showOnboard(true); return; } $("startBtn").disabled=true; sessionLog=[]; lastQuestionText=""; lastAnswer=""; lastUserWasCommand=true; history=[{role:"user",text:"[BEGIN SESSION]"+practiceContext()}]; await speakeasyTurn(); enableAfterStart(); });
+$("startBtn").addEventListener("click",async()=>{ if(!activeKey()){ if(cfg.provider==="openrouter"){ applyCfg(); $("settingsModal").classList.add("show"); } else showOnboard(true); return; } $("startBtn").disabled=true; sessionLog=[]; lastQuestionText=""; lastAnswer=""; lastUserWasCommand=true; history=[{role:"user",text:"[BEGIN SESSION]"+practiceContext()}]; await speakeasyTurn(); enableAfterStart(); });
 $("newBtn").addEventListener("click",async()=>{ if(busy) return; lastUserWasCommand=true; await sendUserTurn("(new prompt, please)","[COMMAND] Give me a new prompt to respond to. Do not grade this; just give the prompt."); });
 $("retryBtn").addEventListener("click",async()=>{ if(busy) return; lastUserWasCommand=true; await sendUserTurn("(I'll retry the same one)","[COMMAND] Repeat the same prompt so I can retry. Do not grade this."); });
 $("sendBtn").addEventListener("click",sendTyped);
@@ -652,20 +741,28 @@ function applyCfg(){
   $("apiKey").value=cfg.apiKey; $("model").value=cfg.model; $("ttsOn").checked=cfg.tts; $("audioOn").checked=cfg.audio;
   $("whisperOn").checked=cfg.whisper; $("whisperModel").value=cfg.whisperModel; $("rememberKey").checked=cfg.rememberKey;
   $("roleInput").value=cfg.role; $("seniorityInput").value=cfg.seniority; $("jdInput").value=cfg.jd;
-  $("goalFillers").value=cfg.goalFillers; $("paceMin").value=cfg.paceMin; $("paceMax").value=cfg.paceMax;
+  $("goalFillers").value=cfg.goalFillers; $("paceMin").value=cfg.paceMin; $("paceMax").value=cfg.paceMax; $("dailyCap").value=cfg.dailyCap;
+  if($("provider")) $("provider").value=cfg.provider; if($("orKey")) $("orKey").value=cfg.orKey; if($("orModel")) $("orModel").value=cfg.orModel;
+  updateProviderUI();
 }
 $("saveBtn").addEventListener("click",()=>{
   cfg.model=$("model").value; cfg.tts=$("ttsOn").checked; cfg.audio=$("audioOn").checked; cfg.voice=$("voiceSel").value;
   const prevWM=cfg.whisperModel; cfg.whisper=$("whisperOn").checked; cfg.whisperModel=$("whisperModel").value; if(cfg.whisperModel!==prevWM) asrPipe=null;
   storeKey($("apiKey").value.trim(), $("rememberKey").checked);
+  cfg.provider=$("provider").value; localStorage.setItem("speakeasy_provider",cfg.provider);
+  storeORKey($("orKey").value.trim(), $("rememberKey").checked);
+  cfg.orModel=$("orModel").value.trim(); localStorage.setItem("speakeasy_orModel",cfg.orModel);
   localStorage.setItem("speakeasy_model",cfg.model);
   localStorage.setItem("speakeasy_tts",cfg.tts?"1":"0"); localStorage.setItem("speakeasy_audio",cfg.audio?"1":"0"); localStorage.setItem("speakeasy_voice",cfg.voice);
   localStorage.setItem("speakeasy_whisper",cfg.whisper?"1":"0"); localStorage.setItem("speakeasy_whisperModel",cfg.whisperModel);
   cfg.goalFillers=Math.max(0,+$("goalFillers").value||3); cfg.paceMin=+$("paceMin").value||110; cfg.paceMax=+$("paceMax").value||150;
+  cfg.dailyCap=+$("dailyCap").value||1500; localStorage.setItem("speakeasy_dailyCap",cfg.dailyCap); renderUsage();
   localStorage.setItem("speakeasy_goalFillers",cfg.goalFillers); localStorage.setItem("speakeasy_paceMin",cfg.paceMin); localStorage.setItem("speakeasy_paceMax",cfg.paceMax);
   setStatus("settings saved."); if(cfg.apiKey) hideBanner(); $("settingsModal").classList.remove("show");
 });
 $("testBtn").addEventListener("click",async()=>{ const el=$("testMsg"); el.className="testmsg"; el.textContent="testing..."; const r=await testKey($("apiKey").value.trim()); el.className="testmsg "+(r.ok?"ok":"bad"); el.textContent=r.msg; });
+if($("provider")) $("provider").addEventListener("change",updateProviderUI);
+if($("orTestBtn")) $("orTestBtn").addEventListener("click",async()=>{ const el=$("orTestMsg"); el.className="testmsg"; el.textContent="testing..."; const r=await testORKey($("orKey").value.trim()); el.className="testmsg "+(r.ok?"ok":"bad"); el.textContent=r.msg; });
 $("clearKey").addEventListener("click",(e)=>{ e.preventDefault(); clearKey(); $("apiKey").value=""; const el=$("testMsg"); el.className="testmsg"; el.textContent="Key cleared from this browser."; });
 $("saveSetupBtn").addEventListener("click",()=>{
   cfg.role=$("roleInput").value.trim(); cfg.seniority=$("seniorityInput").value.trim(); cfg.jd=$("jdInput").value.trim();
@@ -714,4 +811,4 @@ $("settingsModal").addEventListener("click",(e)=>{ if(e.target===$("settingsModa
 /* ── Init ── */
 initIcons(); applyCfg(); renderProgress(); initWave(); renderUsage(); setStatus("");
 if(!SR) showBanner("This tool needs <b>Google Chrome</b> (or Edge) on desktop for speech recognition.",true);
-else if(!cfg.apiKey) showOnboard(true);
+else if(cfg.provider!=="openrouter" && !cfg.apiKey) showOnboard(true);
