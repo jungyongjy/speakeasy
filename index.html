@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; worker-src 'self' blob:; child-src 'self' blob:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' blob: https://generativelanguage.googleapis.com https://openrouter.ai https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; worker-src 'self' blob:; child-src 'self' blob:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'" />
 <title>SpeakEasy // Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -118,14 +118,46 @@ input,select,textarea{font-family:var(--f-body);}
 .typerow input:focus{outline:none;border-color:var(--c-accent);}
 .status{font-family:var(--f-mono);font-size:10px;letter-spacing:var(--ls-wide);color:var(--c-ink-3);min-height:14px;text-align:center;}
 
-/* ── progressive disclosure: session controls hidden until a session starts ── */
-.dock .wave,.dock .dock-main,.dock .dock-sub,.dock .typerow{display:none;}
+/* ── terminal top bar + command line ── */
+.tb-left{display:flex;align-items:center;gap:12px;min-width:0;}
+.dots{display:flex;gap:6px;flex:0 0 auto;}
+.dots i{width:11px;height:11px;border-radius:50%;display:block;}
+.d-r{background:#FF5F57;} .d-y{background:#FEBC2E;} .d-g{background:#28C840;}
+.cmdline{font-family:var(--f-mono);font-size:11px;color:var(--c-ink-3);padding:8px var(--sp-6);border-bottom:1px solid var(--c-line);background:var(--c-bg-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cprompt{color:var(--c-accent);} .cpath{color:var(--c-ink-2);margin-right:6px;}
+.ccursor{color:var(--c-accent);animation:blink 1.1s steps(1) infinite;margin-left:2px;}
+
+/* ── two-pane workspace ── */
+.workspace{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 6px var(--ctrl-w,360px);}
+.pane-conv{min-height:0;display:flex;flex-direction:column;overflow:hidden;}
+.pane-conv #log{max-width:820px;width:100%;margin:0 auto;}
+.divider{background:var(--c-line);cursor:col-resize;position:relative;transition:background var(--dur-fast);}
+.divider:hover,.divider:focus-visible{background:color-mix(in srgb,var(--c-accent) 55%,var(--c-line));outline:none;}
+.divider::after{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:3px;height:38px;border-radius:2px;background:var(--c-ink-3);}
+.pane-ctrl{min-height:0;overflow-y:auto;border-left:1px solid var(--c-line);background:var(--c-bg-2);display:flex;flex-direction:column;}
+.pane-ctrl .mode-pick{flex-direction:column;}
+.pane-ctrl .mode-chip{max-width:none;flex-basis:auto;width:100%;min-height:0;}
+#setupPanel{padding:var(--sp-6) var(--sp-5);}
+.controls{display:flex;flex-direction:column;align-items:center;gap:var(--sp-5);padding:var(--sp-6) var(--sp-5);border-bottom:1px solid var(--c-line);}
+.controls .dock-sub{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);width:100%;}
+.controls .dock-sub #copyBtn{grid-column:1 / 3;}
+.metrics-tabs{padding:var(--sp-4) var(--sp-5) var(--sp-6);}
+
+/* ── progressive disclosure: setup vs controls ── */
+#controls,.metrics-tabs{display:none;}
 .app.in-session #setupPanel{display:none;}
-.app.in-session .dock .wave{display:block;}
-.app.in-session .dock .dock-main{display:flex;}
-.app.in-session .dock .dock-sub{display:flex;}
-.app.in-session .dock .typerow{display:flex;}
-.app.mode-drill .dock .typerow{display:none;}
+.app.in-session #controls{display:flex;}
+.app.in-session .metrics-tabs{display:block;}
+.app.mode-drill #controls .typerow{display:none;}
+
+@media (max-width:760px){
+  body{overflow:auto;}
+  .app{height:auto;min-height:100vh;}
+  .workspace{display:flex;flex-direction:column;}
+  .divider{display:none;}
+  .pane-conv{min-height:46vh;}
+  .pane-ctrl{border-left:none;border-top:1px solid var(--c-line);overflow:visible;}
+}
 
 /* ── pre-session setup panel ── */
 .setup{display:flex;flex-direction:column;align-items:center;gap:var(--sp-6);width:100%;max-width:680px;}
@@ -260,7 +292,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 
 <div class="app">
   <header class="topbar">
-    <span class="brand">SPEAK<b>EASY</b> <span class="brk">// STUDIO</span></span>
+    <span class="tb-left">
+      <span class="dots" aria-hidden="true"><i class="d-r"></i><i class="d-y"></i><i class="d-g"></i></span>
+      <span class="brand">SPEAK<b>EASY</b> <span class="brk">// STUDIO</span></span>
+    </span>
     <div class="topbar-center">
       <span class="recpill" id="recPill"><span class="recdot"></span><span id="recTime">REC 00:00</span></span>
       <span id="usage" title="Requests today"></span>
@@ -273,14 +308,20 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     </div>
   </header>
 
+  <div class="cmdline"><span class="cprompt">speakeasy@studio</span><span class="cpath">:~$</span> <span id="cmdText">ready — select a mode</span><span class="ccursor">▋</span></div>
+
   <div id="setupBanner" class="banner" style="display:none"></div>
 
-  <main class="stage">
-    <div id="log">
-      <div class="empty" id="emptyState"><div class="big">Practice out loud.<br><em>Get coached back.</em></div><div class="empty-sub" id="emptySub">Pick a mode below and press start. You speak your answers; feedback is instant.</div></div>
-    </div>
+  <div class="workspace" id="workspace">
+    <section class="pane-conv">
+      <div id="log">
+        <div class="empty" id="emptyState"><div class="big">Practice out loud.<br><em>Get coached back.</em></div><div class="empty-sub" id="emptySub">Pick a mode on the right and press start. You speak your answers; feedback is instant.</div></div>
+      </div>
+    </section>
 
-    <div class="dock">
+    <div class="divider" id="divider" role="separator" aria-label="Drag to resize panes" tabindex="0"></div>
+
+    <aside class="pane-ctrl">
       <div class="setup" id="setupPanel">
         <div class="mode-pick" role="group" aria-label="Practice mode">
           <button type="button" class="mode-chip active" data-mode="coach" id="modeCoach"><b>Coach</b><span>AI asks questions and scores your delivery</span></button>
@@ -291,45 +332,41 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
         <button id="startBtn" class="btn btn-primary">Start session</button>
       </div>
 
-      <div class="wave" id="wave"><canvas id="waveCanvas"></canvas></div>
-      <div class="dock-main">
-        <button id="micBtn" class="recbtn" disabled aria-label="Record answer">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/><path d="M8.5 21h7"/></svg>
-          <span>Speak</span>
-        </button>
+      <div class="controls" id="controls">
+        <div class="wave" id="wave"><canvas id="waveCanvas"></canvas></div>
+        <div class="dock-main">
+          <button id="micBtn" class="recbtn" disabled aria-label="Record answer">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/><path d="M8.5 21h7"/></svg>
+            <span>Speak</span>
+          </button>
+        </div>
+        <div class="dock-sub">
+          <button id="newBtn" class="btn" disabled>New prompt</button>
+          <button id="retryBtn" class="btn" disabled>Retry same</button>
+          <button id="endBtn" class="btn" disabled>End</button>
+          <button id="reportBtn" class="btn" disabled>Report</button>
+          <button id="copyBtn" class="btn" disabled>Copy transcript</button>
+        </div>
+        <div class="typerow" id="typerow">
+          <input type="text" id="typeInput" placeholder="type to the persona, or a command" disabled />
+          <button id="sendBtn" class="btn" disabled>Send</button>
+        </div>
+        <div class="status" id="status"></div>
       </div>
-      <div class="dock-sub">
-        <button id="newBtn" class="btn" disabled>New prompt</button>
-        <button id="retryBtn" class="btn" disabled>Retry same</button>
-        <button id="endBtn" class="btn" disabled>End &amp; report</button>
-        <button id="reportBtn" class="btn" disabled>Report</button>
-        <button id="copyBtn" class="btn" disabled>Copy transcript</button>
-      </div>
-      <div class="typerow" id="typerow">
-        <input type="text" id="typeInput" placeholder="type to the persona, or a command (answers are spoken)" disabled />
-        <button id="sendBtn" class="btn" disabled>Send</button>
-      </div>
-      <div class="status" id="status"></div>
-    </div>
-  </main>
-</div>
 
-<!-- metrics drawer -->
-<aside class="drawer" id="drawer">
-  <button class="drawer-handle" id="drawerHandle" aria-label="Toggle metrics">
-    <span class="chev">▲</span> Session metrics <span class="brk">·</span> this turn <span class="brk">·</span> transcript <span class="brk">·</span> progress
-  </button>
-  <div class="drawer-body">
-    <div class="tabs" role="tablist">
-      <button id="tabTurn" role="tab" aria-selected="true">This turn</button>
-      <button id="tabTx" role="tab" aria-selected="false">Transcript</button>
-      <button id="tabProgress" role="tab" aria-selected="false">Progress</button>
-    </div>
-    <div class="panel active" id="panelTurn"><div id="metricsBody"><div class="panel-note">Your real voice metrics appear here after each spoken answer.</div></div></div>
-    <div class="panel" id="panelTx"><div id="txBody"><div class="panel-note">A word-timed transcript with fillers highlighted appears here after each spoken answer.</div></div></div>
-    <div class="panel" id="panelProgress"><div id="progressBody"><div class="panel-note">Complete a coached response to start tracking your scores.</div></div></div>
+      <div class="metrics-tabs" id="metricsTabs">
+        <div class="tabs" role="tablist">
+          <button id="tabTurn" role="tab" aria-selected="true">This turn</button>
+          <button id="tabTx" role="tab" aria-selected="false">Transcript</button>
+          <button id="tabProgress" role="tab" aria-selected="false">Progress</button>
+        </div>
+        <div class="panel active" id="panelTurn"><div id="metricsBody"><div class="panel-note">Your real voice metrics appear here after each spoken answer.</div></div></div>
+        <div class="panel" id="panelTx"><div id="txBody"><div class="panel-note">A word-timed transcript with fillers highlighted appears here after each spoken answer.</div></div></div>
+        <div class="panel" id="panelProgress"><div id="progressBody"><div class="panel-note">Complete a coached response to start tracking your scores.</div></div></div>
+      </div>
+    </aside>
   </div>
-</aside>
+</div>
 
 <!-- onboarding -->
 <div class="overlay" id="onboard">
