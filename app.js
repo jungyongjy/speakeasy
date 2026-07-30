@@ -312,7 +312,7 @@ async function speakeasyTurn(){
   if(raw){
     const text=cmd?stripDebrief(raw):raw;
     bodyEl.innerHTML=mdLite(text)||"..."; history.push({role:"model",text}); speak(text);
-    if(!cmd){ const sc=parseScores(text); if(sc){ recordProgress(sc); sessionLog.push({q:lastQuestionText,a:lastAnswer,debrief:text,m:lastMeasured}); $("drawer").classList.add("open"); switchTab("turn"); } }
+    if(!cmd){ const sc=parseScores(text); if(sc){ recordProgress(sc); sessionLog.push({q:lastQuestionText,a:lastAnswer,debrief:text,m:lastMeasured}); switchTab("turn"); } }
     lastQuestionText=text;
   } else { const msg=bodyEl.parentElement; if(msg&&msg.parentElement) msg.parentElement.removeChild(msg); }
   busy=false; setBusy(false);
@@ -715,7 +715,7 @@ async function stopSpeaking(){
   if(!transcript){ setStatus("didn't catch anything, try again."); return; }
   const m=computeMetrics(transcript, wa); lastMeasured=m; renderMetrics(m); renderTranscript(wa,m);
   switchTab(wa?"tx":"turn"); setStatus("");
-  if(cfg.mode==="drill"){ $("drawer").classList.add("open"); setStatus("drill logged locally. No AI used."); return; }
+  if(cfg.mode==="drill"){ switchTab(wa?"tx":"turn"); setStatus("drill logged locally. No AI used."); return; }
   lastUserWasCommand=false;
   if(cfg.mode==="roleplay"){ await sendUserTurn(transcript, transcript+"\n\n"+metricsToText(m)); return; }
   await sendUserTurn(transcript, "Question I answered: "+lastQuestionText+"\n\nMy spoken answer: "+transcript+"\n\n"+metricsToText(m));
@@ -728,6 +728,7 @@ function setInSession(on){ inSession=on; const app=document.querySelector(".app"
   app.classList.toggle("mode-coach",on&&cfg.mode==="coach");
   app.classList.toggle("mode-roleplay",on&&cfg.mode==="roleplay");
   app.classList.toggle("mode-drill",on&&cfg.mode==="drill");
+  updateCmdline();
 }
 function enableAfterStart(){ if(!inSession) return;
   ["micBtn","endBtn","reportBtn","copyBtn"].forEach(id=>{const el=$(id); if(el)el.disabled=false;});
@@ -758,7 +759,7 @@ $("retryBtn").addEventListener("click",()=>{ if(busy||!inSession) return; if(cfg
 $("endBtn").addEventListener("click",async()=>{
   if(busy||!inSession) return;
   if(cfg.mode==="roleplay"){ addMsg("you","(ending the roleplay, please debrief)"); history.push({role:"user",text:"[BREAK] End the roleplay now and deliver the full coaching debrief with the Score section, judging how I performed in character."}); lastUserWasCommand=false; await speakeasyTurn(); }
-  $("report").innerHTML=buildReport(); window.print();
+  setInSession(false); updateCmdline(); setStatus("session ended. pick a mode to start again."); if(window.speechSynthesis) speechSynthesis.cancel();
 });
 $("copyBtn").addEventListener("click",()=>{ const t=(lastWa&&lastWa.text)?lastWa.text:(lastAnswer||""); if(!t){ setStatus("no transcript yet."); return; } if(navigator.clipboard) navigator.clipboard.writeText(t).then(()=>setStatus("transcript copied."),()=>setStatus("copy failed.")); else setStatus("clipboard not available."); });
 $("sendBtn").addEventListener("click",sendTyped);
@@ -895,7 +896,23 @@ function initWave(){
 let recTimer=null,recT0=0;
 function startRec(){ const p=$("recPill"); if(p)p.classList.add("show"); recT0=Date.now(); const t=$("recTime"); if(recTimer)clearInterval(recTimer); recTimer=setInterval(()=>{ const s=Math.floor((Date.now()-recT0)/1000); if(t)t.textContent="REC "+String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"); },500); }
 function stopRec(){ if(recTimer){clearInterval(recTimer);recTimer=null;} const p=$("recPill"); if(p)p.classList.remove("show"); }
-$("drawerHandle").addEventListener("click",()=>$("drawer").classList.toggle("open"));
+/* draggable divider between conversation and controls */
+function initDivider(){ const ws=$("workspace"), dv=$("divider"); if(!ws||!dv) return;
+  const saved=parseInt(localStorage.getItem("speakeasy_ctrlW")||"",10); if(saved) ws.style.setProperty("--ctrl-w",saved+"px");
+  let dragging=false;
+  const move=(e)=>{ if(!dragging) return; const x=e.touches?e.touches[0].clientX:e.clientX; const r=ws.getBoundingClientRect(); let w=Math.round(r.right-x); w=Math.max(280,Math.min(600,w)); ws.style.setProperty("--ctrl-w",w+"px"); };
+  const up=()=>{ if(!dragging) return; dragging=false; document.body.style.userSelect=""; const w=parseInt(getComputedStyle(ws).getPropertyValue("--ctrl-w"),10); if(w) localStorage.setItem("speakeasy_ctrlW",w); };
+  dv.addEventListener("mousedown",(e)=>{ dragging=true; document.body.style.userSelect="none"; e.preventDefault(); });
+  window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+  dv.addEventListener("touchstart",()=>{dragging=true;},{passive:true}); window.addEventListener("touchmove",move,{passive:true}); window.addEventListener("touchend",up);
+}
+function updateCmdline(){ const el=$("cmdText"); if(!el) return;
+  if(!inSession){ el.textContent="ready — select a mode"; return; }
+  let s="session --mode "+cfg.mode;
+  if(cfg.mode==="roleplay" && cfg.scenario) s+=' --persona "'+cfg.scenario.slice(0,48)+'"';
+  else if(cfg.role) s+=' --role "'+cfg.role.slice(0,48)+'"';
+  el.textContent=s;
+}
 $("settingsBtn").addEventListener("click",()=>{ applyCfg(); $("settingsModal").classList.add("show"); });
 $("settingsClose").addEventListener("click",()=>$("settingsModal").classList.remove("show"));
 $("settingsModal").addEventListener("click",(e)=>{ if(e.target===$("settingsModal")) $("settingsModal").classList.remove("show"); });
@@ -910,6 +927,6 @@ function setMode(m){ cfg.mode=m; localStorage.setItem("speakeasy_mode",m);
 document.addEventListener("keydown",(e)=>{ if(e.code!=="Space"||!inSession||busy) return; const t=e.target; if(t&&(t.tagName==="INPUT"||t.tagName==="TEXTAREA"||t.isContentEditable)) return; const mb=$("micBtn"); if(!mb||mb.disabled) return; e.preventDefault(); recognizing?stopSpeaking():startSpeaking(); });
 
 /* ── Init ── */
-initIcons(); applyCfg(); setMode(cfg.mode); renderProgress(); initWave(); renderUsage(); setStatus("");
+initIcons(); applyCfg(); setMode(cfg.mode); renderProgress(); initWave(); renderUsage(); initDivider(); updateCmdline(); setStatus("");
 if(!SR) showBanner("This tool needs <b>Google Chrome</b> (or Edge) on desktop for speech recognition.",true);
 else if(!activeKey()) showOnboard(true);
