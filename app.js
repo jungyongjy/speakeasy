@@ -5,7 +5,10 @@ const cfg = {
   apiKey: localStorage.getItem("speakeasy_key") || sessionStorage.getItem("speakeasy_key") || "",
   rememberKey: localStorage.getItem("speakeasy_remember") !== "0",
   model: (function(m){ return (!m||/^gemini-(1\.|2\.0)/.test(m)||m==="gemini-3-flash")?"gemini-2.5-flash":m; })(localStorage.getItem("speakeasy_model")),
-  dailyCap: +(localStorage.getItem("speakeasy_dailyCap")||1500),
+  capGemini: +(localStorage.getItem("speakeasy_capGemini")||localStorage.getItem("speakeasy_dailyCap")||20),
+  capOR: +(localStorage.getItem("speakeasy_capOR")||50),
+  mode: localStorage.getItem("speakeasy_mode")||"coach",
+  scenario: localStorage.getItem("speakeasy_scenario")||"",
   provider: localStorage.getItem("speakeasy_provider") || "gemini",
   orKey: localStorage.getItem("speakeasy_orKey") || sessionStorage.getItem("speakeasy_orKey") || "",
   orModel: localStorage.getItem("speakeasy_orModel") || "",
@@ -61,11 +64,12 @@ const SPEAKEASY_PROMPT = [
 "",
 "CONSTRAINTS: Never give generic advice without anchoring it to a specific moment. Never invent feedback not grounded in what they said or the measured metrics. Never use em-dashes in any reply; use commas, colons, parentheses, or full stops instead. Keep debriefs under 200 words. Keep spoken prompts short and natural.",
 "",
-"Begin by introducing yourself in two sentences, then ask which mode they want and what context they are practising for (interview, presentation, or everyday conversation)."
+"You will receive a session-start message that states the mode (coach or roleplay) and any context. Do NOT introduce yourself and do NOT ask which mode they want: act on that message immediately. In coach mode the app itself shows each question to the user and then sends you their spoken answer with metrics for grading, so grade the answer against the question given. In roleplay mode, open and stay fully in character until the user ends, then deliver the debrief."
 ].join("\n");
 
 /* ── State ── */
 let history = [], busy = false, lastMeasured = null, lastUserWasCommand = false;
+let provOverride = null, inSession = false, questionBank = [];
 let lastPlayBuffer=null, playCtx=null, playingEl=null, lastWa=null;
 let sessionLog=[], lastAnswer="", lastQuestionText="";
 
@@ -81,8 +85,17 @@ function addMsg(who, text){
   logEl.appendChild(d); logEl.scrollTop=logEl.scrollHeight;
   return d.querySelector(".body");
 }
-function bumpUsage(){ const day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} if(u.date!==day) u={date:day,count:0}; u.count=(u.count||0)+1; localStorage.setItem("speakeasy_usage",JSON.stringify(u)); renderUsage(); }
-function renderUsage(){ const el=$("usage"); if(!el) return; const cap=cfg.dailyCap||1500, day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} const n=(u.date===day)?(u.count||0):0; el.textContent="API "+n+"/"+cap; el.style.color=n>cap*0.9?"var(--c-danger)":(n>cap*0.7?"var(--c-amber)":"var(--c-ink-3)"); el.title="Approx Gemini free-tier usage today (~"+cap+" requests/day, resets daily Pacific time). Counted locally on this device."; }
+function usageObj(){ const day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} if(u.date!==day) u={date:day,gemini:0,openrouter:0}; if(typeof u.gemini!=="number")u.gemini=0; if(typeof u.openrouter!=="number")u.openrouter=0; return u; }
+function capFor(prov){ return prov==="openrouter"?(cfg.capOR||50):(cfg.capGemini||20); }
+function usedFor(prov){ return usageObj()[prov]||0; }
+function usageLeft(prov){ return Math.max(0, capFor(prov)-usedFor(prov)); }
+function keyFor(prov){ return prov==="openrouter"?cfg.orKey:cfg.apiKey; }
+function bumpUsage(prov){ const u=usageObj(); u[prov]=(u[prov]||0)+1; localStorage.setItem("speakeasy_usage",JSON.stringify(u)); renderUsage(); }
+function renderUsage(){ const el=$("usage"); if(!el) return; const u=usageObj(); const act=provOverride||cfg.provider;
+  const seg=(p,label)=>{ const n=u[p]||0, cap=capFor(p); const col=n>=cap?"var(--c-danger)":(n>cap*0.8?"var(--c-amber)":"var(--c-ink-3)"); return '<span class="up'+(act===p?" act":"")+'" style="color:'+(act===p?"var(--c-accent)":col)+'">'+label+" "+n+"/"+cap+"</span>"; };
+  el.innerHTML='<span class="usage-split">'+seg("gemini","Gemini")+seg("openrouter","OpenRouter")+"</span>";
+  el.title="Requests today (local estimate on this device). Active provider highlighted. Gemini resets midnight Pacific; OpenRouter midnight UTC.";
+}
 
 /* ── Icons (inline SVG, no emoji) ── */
 const ICONS={
@@ -138,11 +151,11 @@ function speak(text){
 }
 
 /* ── Gemini ── */
-async function callGemini(onDelta){
+async function callGemini(onDelta, msgs){
   if(!cfg.apiKey){ showBanner("Add your Gemini API key in Settings to begin.",true); return null; }
   const url="https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(cfg.model)+":streamGenerateContent?alt=sse";
   const body={ system_instruction:{parts:[{text:SPEAKEASY_PROMPT}]},
-    contents:history.map(h=>({role:h.role,parts:[{text:h.text}]})),
+    contents:(msgs||history).map(h=>({role:h.role,parts:[{text:h.text}]})),
     generationConfig:{temperature:0.75,maxOutputTokens:2048} };
   let res;
   try{ res=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":cfg.apiKey},body:JSON.stringify(body)}); }
@@ -154,7 +167,7 @@ async function callGemini(onDelta){
     else showBanner("Gemini error "+res.status+": "+d,true);
     return null;
   }
-  hideBanner(); bumpUsage();
+  hideBanner(); bumpUsage("gemini");
   let full="", blocked="";
   try{
     const reader=res.body.getReader(), decoder=new TextDecoder(); let buf="";
@@ -175,13 +188,13 @@ async function callGemini(onDelta){
 
 /* ── OpenRouter (OpenAI-compatible) ── */
 function activeKey(){ return cfg.provider==="openrouter"?cfg.orKey:cfg.apiKey; }
-function callModel(onDelta){ return cfg.provider==="openrouter"?callOpenRouter(onDelta):callGemini(onDelta); }
-async function callOpenRouter(onDelta){
+function callModel(onDelta, prov, msgs){ return prov==="openrouter"?callOpenRouter(onDelta,msgs):callGemini(onDelta,msgs); }
+async function callOpenRouter(onDelta, msgs){
   if(!cfg.orKey){ showBanner("Add your OpenRouter API key in Settings to use OpenRouter.",true); return null; }
   if(!cfg.orModel){ showBanner("Pick an OpenRouter model in Settings (an id ending in :free stays free).",true); return null; }
   const url="https://openrouter.ai/api/v1/chat/completions";
-  const msgs=[{role:"system",content:SPEAKEASY_PROMPT}].concat(history.map(h=>({role:h.role==="model"?"assistant":"user",content:h.text})));
-  const body={ model:cfg.orModel, messages:msgs, stream:true, temperature:0.75, max_tokens:2048 };
+  const wire=[{role:"system",content:SPEAKEASY_PROMPT}].concat((msgs||history).map(h=>({role:h.role==="model"?"assistant":"user",content:h.text})));
+  const body={ model:cfg.orModel, messages:wire, stream:true, temperature:0.75, max_tokens:2048 };
   let res;
   try{ res=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+cfg.orKey,"X-Title":"SpeakEasy"},body:JSON.stringify(body)}); }
   catch(e){ showBanner("Network error reaching OpenRouter. ("+e.message+")",true); return null; }
@@ -193,7 +206,7 @@ async function callOpenRouter(onDelta){
     else showBanner("OpenRouter error "+res.status+": "+d,true);
     return null;
   }
-  hideBanner(); bumpUsage();
+  hideBanner(); bumpUsage("openrouter");
   let full="";
   try{
     const reader=res.body.getReader(), decoder=new TextDecoder(); let buf="";
@@ -247,6 +260,37 @@ function updateProviderUI(){
   if(o) o.style.display=(p==="openrouter")?"":"none";
   if(p==="openrouter") fetchORModels();
 }
+/* pick a provider for the next call, asking before switching when the primary is spent */
+async function gateProvider(){
+  let p=provOverride||cfg.provider;
+  if(!keyFor(p)){ const o=p==="gemini"?"openrouter":"gemini"; if(keyFor(o)){ p=o; provOverride=o; } else { showBanner("Add an API key in Settings to continue.",true); return null; } }
+  if(usageLeft(p)>0) return p;
+  const other=p==="gemini"?"openrouter":"gemini", nm=(x)=>x==="gemini"?"Gemini":"OpenRouter";
+  if(keyFor(other)&&usageLeft(other)>0){
+    if(confirm("You have used all "+capFor(p)+" "+nm(p)+" requests today (local estimate). Switch to "+nm(other)+" for the rest of this session?")){ provOverride=other; renderUsage(); return other; }
+    showBanner("Paused: you are at your "+nm(p)+" daily limit. Switch provider in Settings or come back after it resets.",true); return null;
+  }
+  showBanner("Daily request limit reached. Gemini resets midnight Pacific, OpenRouter midnight UTC. Add or switch to another provider in Settings to keep going.",true);
+  return null;
+}
+/* one call returns a batch of tailored questions, served locally afterward (0 calls) */
+async function generateQuestions(){
+  const prov=await gateProvider(); if(!prov) return [];
+  const msg=[{role:"user",text:"Generate exactly 5 concise interview questions tailored to the context below. Output ONLY a numbered list from 1. to 5., one question per line. No preamble, no commentary, no scores, no markdown, no em-dashes."+practiceContext()}];
+  const raw=await callModel(null, prov, msg);
+  if(!raw) return [];
+  return raw.split(/\n+/).map(l=>l.replace(/^[\s>*\-]*\d+[\).\]]?\s*/,"").replace(/^[\-\*]\s*/,"").trim()).filter(l=>l.length>6).slice(0,8);
+}
+/* local question set (no API) */
+const LOCAL_QUESTIONS={
+  general:["Walk me through your background in about ninety seconds.","Why are you interested in this role?","What are your greatest strengths, and how do they show up at work?","Where do you want to grow over the next few years?","Why are you looking to leave your current role?"],
+  behavioral:["Tell me about a time you handled a difficult stakeholder. What did you do and what was the result?","Describe a situation where you missed a deadline. How did you handle it?","Give an example of a time you led a project without formal authority.","Tell me about a mistake you made at work and what you learned.","Describe a time you had to persuade someone who disagreed with you."],
+  presentation:["Give a two minute overview of a project you are proud of.","Explain a complex idea from your field to someone outside it.","Pitch an idea you believe your team should invest in.","Summarise the most important trend affecting your industry.","Introduce yourself as if opening a conference talk."]
+};
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+function fillLocalBank(){ const pool=LOCAL_QUESTIONS.general.concat(LOCAL_QUESTIONS.behavioral,LOCAL_QUESTIONS.presentation); questionBank=shuffle(pool.slice()); }
+function nextQuestion(){ if(!questionBank.length) fillLocalBank(); return questionBank.shift(); }
+function showQuestion(text){ if(!text) return; lastQuestionText=text; addMsg("speakeasy",text); if(cfg.tts) speak(text); }
 
 function stripDebrief(t){
   if(!t) return t;
@@ -259,9 +303,11 @@ function stripDebrief(t){
 }
 async function speakeasyTurn(){
   if(busy) return; busy=true; setBusy(true); setStatus("thinking…");
+  const prov=await gateProvider();
+  if(!prov){ busy=false; setBusy(false); setStatus(""); return; }
   const cmd=lastUserWasCommand;
   const bodyEl=addMsg("speakeasy","");
-  const raw=await callModel((t)=>{ bodyEl.innerHTML=mdLite(cmd?stripDebrief(t):t); logEl.scrollTop=logEl.scrollHeight; });
+  const raw=await callModel((t)=>{ bodyEl.innerHTML=mdLite(cmd?stripDebrief(t):t); logEl.scrollTop=logEl.scrollHeight; }, prov);
   setStatus("");
   if(raw){
     const text=cmd?stripDebrief(raw):raw;
@@ -271,7 +317,7 @@ async function speakeasyTurn(){
   } else { const msg=bodyEl.parentElement; if(msg&&msg.parentElement) msg.parentElement.removeChild(msg); }
   busy=false; setBusy(false);
 }
-function setBusy(b){ ["startBtn","micBtn","newBtn","retryBtn","sendBtn","typeInput"].forEach(id=>{$(id).disabled=b;}); if(!b) enableAfterStart(); }
+function setBusy(b){ ["startBtn","micBtn","newBtn","retryBtn","sendBtn","typeInput","endBtn","copyBtn"].forEach(id=>{const el=$(id); if(el)el.disabled=b;}); if(!b) enableAfterStart(); }
 async function sendUserTurn(display, sent){ lastAnswer=display; addMsg("you",display); history.push({role:"user",text:sent}); await speakeasyTurn(); }
 
 /* ── Speech recognition + audio ── */
@@ -668,19 +714,58 @@ async function stopSpeaking(){
   }
   if(!transcript){ setStatus("didn't catch anything, try again."); return; }
   const m=computeMetrics(transcript, wa); lastMeasured=m; renderMetrics(m); renderTranscript(wa,m);
-  switchTab(wa?"tx":"turn"); setStatus(""); lastUserWasCommand=false;
-  await sendUserTurn(transcript, transcript+"\n\n"+metricsToText(m));
+  switchTab(wa?"tx":"turn"); setStatus("");
+  if(cfg.mode==="drill"){ $("drawer").classList.add("open"); setStatus("drill logged locally. No AI used."); return; }
+  lastUserWasCommand=false;
+  if(cfg.mode==="roleplay"){ await sendUserTurn(transcript, transcript+"\n\n"+metricsToText(m)); return; }
+  await sendUserTurn(transcript, "Question I answered: "+lastQuestionText+"\n\nMy spoken answer: "+transcript+"\n\n"+metricsToText(m));
 }
 $("micBtn").addEventListener("click",()=>{ recognizing?stopSpeaking():startSpeaking(); });
 
 /* ── Buttons ── */
-function enableAfterStart(){ if(!history.length) return; ["micBtn","newBtn","retryBtn","sendBtn","typeInput","reportBtn"].forEach(id=>{$(id).disabled=false;}); $("startBtn").disabled=true; }
-$("startBtn").addEventListener("click",async()=>{ if(!activeKey()){ if(cfg.provider==="openrouter"){ applyCfg(); $("settingsModal").classList.add("show"); } else showOnboard(true); return; } $("startBtn").disabled=true; sessionLog=[]; lastQuestionText=""; lastAnswer=""; lastUserWasCommand=true; history=[{role:"user",text:"[BEGIN SESSION]"+practiceContext()}]; await speakeasyTurn(); enableAfterStart(); });
-$("newBtn").addEventListener("click",async()=>{ if(busy) return; lastUserWasCommand=true; await sendUserTurn("(new prompt, please)","[COMMAND] Give me a new prompt to respond to. Do not grade this; just give the prompt."); });
-$("retryBtn").addEventListener("click",async()=>{ if(busy) return; lastUserWasCommand=true; await sendUserTurn("(I'll retry the same one)","[COMMAND] Repeat the same prompt so I can retry. Do not grade this."); });
+function setInSession(on){ inSession=on; const app=document.querySelector(".app"); if(!app) return;
+  app.classList.toggle("in-session",on);
+  app.classList.toggle("mode-coach",on&&cfg.mode==="coach");
+  app.classList.toggle("mode-roleplay",on&&cfg.mode==="roleplay");
+  app.classList.toggle("mode-drill",on&&cfg.mode==="drill");
+}
+function enableAfterStart(){ if(!inSession) return;
+  ["micBtn","endBtn","reportBtn","copyBtn"].forEach(id=>{const el=$(id); if(el)el.disabled=false;});
+  const rp=cfg.mode==="roleplay", drill=cfg.mode==="drill";
+  $("newBtn").disabled=rp; $("retryBtn").disabled=false;
+  $("typeInput").disabled=drill; $("sendBtn").disabled=drill;
+}
+$("startBtn").addEventListener("click",async()=>{
+  if(cfg.mode!=="drill" && !activeKey()){ if(cfg.provider==="openrouter"){ applyCfg(); $("settingsModal").classList.add("show"); } else showOnboard(true); return; }
+  localStorage.setItem("speakeasy_mode",cfg.mode);
+  sessionLog=[]; lastQuestionText=""; lastAnswer=""; lastUserWasCommand=false; history=[]; questionBank=[]; provOverride=null;
+  setInSession(true);
+  if(cfg.mode==="drill"){ fillLocalBank(); showQuestion(nextQuestion()); enableAfterStart(); setStatus("drill mode: record for on-device metrics, no AI used."); return; }
+  if(cfg.mode==="roleplay"){
+    const scene=($("scenarioInput").value.trim())||cfg.scenario||"a realistic interviewer for the target role";
+    cfg.scenario=scene; localStorage.setItem("speakeasy_scenario",scene);
+    history=[{role:"user",text:"[SESSION START] Mode: ROLEPLAY. Persona and scene: "+scene+"."+practiceContext()+" Stay fully in character. Do not present yourself as an AI or a coach. Open the scene now with a short first line (2 to 4 sentences), then wait for my spoken reply. Do not output any Score."}];
+    await speakeasyTurn(); enableAfterStart(); return;
+  }
+  /* coach */
+  const tailored=!!(cfg.role||cfg.jd);
+  if(tailored){ setBusy(true); setStatus("preparing tailored questions…"); const qs=await generateQuestions(); setBusy(false); setStatus(""); if(qs.length) questionBank=qs; else fillLocalBank(); }
+  else { fillLocalBank(); }
+  showQuestion(nextQuestion()); enableAfterStart();
+});
+$("newBtn").addEventListener("click",()=>{ if(busy||!inSession||cfg.mode==="roleplay") return; showQuestion(nextQuestion()); });
+$("retryBtn").addEventListener("click",()=>{ if(busy||!inSession) return; if(cfg.mode==="roleplay"){ setStatus("keep the scene going: speak or type your reply."); return; } if(lastQuestionText){ addMsg("speakeasy",lastQuestionText); if(cfg.tts) speak(lastQuestionText); } });
+$("endBtn").addEventListener("click",async()=>{
+  if(busy||!inSession) return;
+  if(cfg.mode==="roleplay"){ addMsg("you","(ending the roleplay, please debrief)"); history.push({role:"user",text:"[BREAK] End the roleplay now and deliver the full coaching debrief with the Score section, judging how I performed in character."}); lastUserWasCommand=false; await speakeasyTurn(); }
+  $("report").innerHTML=buildReport(); window.print();
+});
+$("copyBtn").addEventListener("click",()=>{ const t=(lastWa&&lastWa.text)?lastWa.text:(lastAnswer||""); if(!t){ setStatus("no transcript yet."); return; } if(navigator.clipboard) navigator.clipboard.writeText(t).then(()=>setStatus("transcript copied."),()=>setStatus("copy failed.")); else setStatus("clipboard not available."); });
 $("sendBtn").addEventListener("click",sendTyped);
 $("typeInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") sendTyped(); });
-async function sendTyped(){ const v=$("typeInput").value.trim(); if(!v||busy) return; $("typeInput").value=""; lastUserWasCommand=true; await sendUserTurn(v, v+"\n\n[COMMAND] This is an instruction, not a practice answer. Act on it, reply briefly, and do not output any Score."); }
+async function sendTyped(){ const v=$("typeInput").value.trim(); if(!v||busy) return; $("typeInput").value="";
+  if(cfg.mode==="roleplay"){ lastUserWasCommand=false; await sendUserTurn(v, v); return; }
+  lastUserWasCommand=true; await sendUserTurn(v, v+"\n\n[COMMAND] This is an instruction, not a practice answer. Act on it, reply briefly, and do not output any Score."); }
 
 /* ── Session report ── */
 function repText(s){ return mdLite(s||"").replace(/\n/g,"<br>"); }
@@ -734,14 +819,19 @@ function practiceContext(){
   if(!parts.length) return "";
   return "\n\n[PRACTICE CONTEXT] The user is preparing for this specific role. Ask questions tailored to it and weight scoring toward its likely competencies.\n"+parts.join("\n");
 }
-function showOnboard(s){ $("onboard").classList.toggle("show", !!s); }
+function obHint(){ const p=$("obProvider")?$("obProvider").value:"gemini", h=$("obKeyHint"), k=$("obKey");
+  if(p==="openrouter"){ if(h)h.innerHTML='Free OpenRouter key (no card): <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>'; if(k)k.placeholder="sk-or-..."; }
+  else { if(h)h.innerHTML='Free Gemini key (no card): <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>'; if(k)k.placeholder="Paste your key"; }
+}
+function showOnboard(s){ if(s&&$("obProvider")){ $("obProvider").value=cfg.provider; obHint(); } $("onboard").classList.toggle("show", !!s); }
 
 /* ── Settings ── */
 function applyCfg(){
   $("apiKey").value=cfg.apiKey; $("model").value=cfg.model; $("ttsOn").checked=cfg.tts; $("audioOn").checked=cfg.audio;
   $("whisperOn").checked=cfg.whisper; $("whisperModel").value=cfg.whisperModel; $("rememberKey").checked=cfg.rememberKey;
   $("roleInput").value=cfg.role; $("seniorityInput").value=cfg.seniority; $("jdInput").value=cfg.jd;
-  $("goalFillers").value=cfg.goalFillers; $("paceMin").value=cfg.paceMin; $("paceMax").value=cfg.paceMax; $("dailyCap").value=cfg.dailyCap;
+  $("goalFillers").value=cfg.goalFillers; $("paceMin").value=cfg.paceMin; $("paceMax").value=cfg.paceMax;
+  if($("capGemini")) $("capGemini").value=cfg.capGemini; if($("capOR")) $("capOR").value=cfg.capOR;
   if($("provider")) $("provider").value=cfg.provider; if($("orKey")) $("orKey").value=cfg.orKey; if($("orModel")) $("orModel").value=cfg.orModel;
   updateProviderUI();
 }
@@ -756,7 +846,8 @@ $("saveBtn").addEventListener("click",()=>{
   localStorage.setItem("speakeasy_tts",cfg.tts?"1":"0"); localStorage.setItem("speakeasy_audio",cfg.audio?"1":"0"); localStorage.setItem("speakeasy_voice",cfg.voice);
   localStorage.setItem("speakeasy_whisper",cfg.whisper?"1":"0"); localStorage.setItem("speakeasy_whisperModel",cfg.whisperModel);
   cfg.goalFillers=Math.max(0,+$("goalFillers").value||3); cfg.paceMin=+$("paceMin").value||110; cfg.paceMax=+$("paceMax").value||150;
-  cfg.dailyCap=+$("dailyCap").value||1500; localStorage.setItem("speakeasy_dailyCap",cfg.dailyCap); renderUsage();
+  cfg.capGemini=Math.max(1,+$("capGemini").value||20); localStorage.setItem("speakeasy_capGemini",cfg.capGemini);
+  cfg.capOR=Math.max(1,+$("capOR").value||50); localStorage.setItem("speakeasy_capOR",cfg.capOR); renderUsage();
   localStorage.setItem("speakeasy_goalFillers",cfg.goalFillers); localStorage.setItem("speakeasy_paceMin",cfg.paceMin); localStorage.setItem("speakeasy_paceMax",cfg.paceMax);
   setStatus("settings saved."); if(cfg.apiKey) hideBanner(); $("settingsModal").classList.remove("show");
 });
@@ -771,8 +862,9 @@ $("saveSetupBtn").addEventListener("click",()=>{
 });
 
 /* ── Onboarding modal ── */
-$("obTest").addEventListener("click",async()=>{ const el=$("obMsg"); el.className="testmsg"; el.textContent="testing..."; const r=await testKey($("obKey").value.trim()); el.className="testmsg "+(r.ok?"ok":"bad"); el.textContent=r.msg; });
-$("obStart").addEventListener("click",()=>{ const key=$("obKey").value.trim(); if(!key){ const el=$("obMsg"); el.className="testmsg bad"; el.textContent="Paste your key first."; return; } storeKey(key, $("obRemember").checked); applyCfg(); showOnboard(false); hideBanner(); setStatus("ready"); });
+if($("obProvider")) $("obProvider").addEventListener("change",obHint);
+$("obTest").addEventListener("click",async()=>{ const el=$("obMsg"); el.className="testmsg"; el.textContent="testing..."; const p=$("obProvider").value; const r=p==="openrouter"?await testORKey($("obKey").value.trim()):await testKey($("obKey").value.trim()); el.className="testmsg "+(r.ok?"ok":"bad"); el.textContent=r.msg; });
+$("obStart").addEventListener("click",()=>{ const key=$("obKey").value.trim(); if(!key){ const el=$("obMsg"); el.className="testmsg bad"; el.textContent="Paste your key first."; return; } const p=$("obProvider").value; cfg.provider=p; localStorage.setItem("speakeasy_provider",p); if(p==="openrouter") storeORKey(key,$("obRemember").checked); else storeKey(key,$("obRemember").checked); applyCfg(); showOnboard(false); hideBanner(); setStatus("ready"); renderUsage(); });
 $("onboard").addEventListener("click",(e)=>{ if(e.target===$("onboard")) showOnboard(false); });
 
 /* ── Studio UI: live waveform, drawer, settings, REC timer ── */
@@ -809,6 +901,15 @@ $("settingsClose").addEventListener("click",()=>$("settingsModal").classList.rem
 $("settingsModal").addEventListener("click",(e)=>{ if(e.target===$("settingsModal")) $("settingsModal").classList.remove("show"); });
 
 /* ── Init ── */
-initIcons(); applyCfg(); renderProgress(); initWave(); renderUsage(); setStatus("");
+/* ── Mode chips + keyboard shortcut ── */
+function setMode(m){ cfg.mode=m; localStorage.setItem("speakeasy_mode",m);
+  ["Coach","Roleplay","Drill"].forEach(x=>{ const el=$("mode"+x); if(el) el.classList.toggle("active", el.getAttribute("data-mode")===m); });
+  const sc=$("scenarioInput"); if(sc) sc.style.display=(m==="roleplay")?"":"none";
+}
+[["modeCoach","coach"],["modeRoleplay","roleplay"],["modeDrill","drill"]].forEach(([id,m])=>{ const el=$(id); if(el) el.addEventListener("click",()=>setMode(m)); });
+document.addEventListener("keydown",(e)=>{ if(e.code!=="Space"||!inSession||busy) return; const t=e.target; if(t&&(t.tagName==="INPUT"||t.tagName==="TEXTAREA"||t.isContentEditable)) return; const mb=$("micBtn"); if(!mb||mb.disabled) return; e.preventDefault(); recognizing?stopSpeaking():startSpeaking(); });
+
+/* ── Init ── */
+initIcons(); applyCfg(); setMode(cfg.mode); renderProgress(); initWave(); renderUsage(); setStatus("");
 if(!SR) showBanner("This tool needs <b>Google Chrome</b> (or Edge) on desktop for speech recognition.",true);
-else if(cfg.provider!=="openrouter" && !cfg.apiKey) showOnboard(true);
+else if(!activeKey()) showOnboard(true);
