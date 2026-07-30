@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; worker-src 'self' blob:; child-src 'self' blob:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co; worker-src 'self' blob:; child-src 'self' blob:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'" />
 <title>SpeakEasy // Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -79,28 +79,31 @@ input,select,textarea{font-family:var(--f-body);}
 
 /* ── stage ── */
 .stage{flex:1;display:flex;flex-direction:column;min-height:0;width:100%;max-width:var(--max-w);margin:0 auto;padding:0 var(--sp-5);}
-#log{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:var(--sp-4);padding:var(--sp-6) 2px var(--sp-4);}
-#log::-webkit-scrollbar{width:8px;}#log::-webkit-scrollbar-thumb{background:var(--c-line);border-radius:8px;}
+#log{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:var(--sp-5);padding:var(--sp-6) var(--sp-3) var(--sp-4);scroll-behavior:smooth;}
+#log::-webkit-scrollbar{width:14px;}
+#log::-webkit-scrollbar-track{background:transparent;}
+#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:8px;border:4px solid transparent;background-clip:content-box;}
+#log::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.32);background-clip:content-box;}
 .empty{margin:auto;text-align:center;max-width:32ch;color:var(--c-ink-3);}
 .empty .big{font-family:var(--f-display);font-weight:700;font-size:var(--t-2xl);color:var(--c-ink);letter-spacing:var(--ls-tight);line-height:var(--lh-head);margin-bottom:var(--sp-3);}
 .empty .big em{font-style:normal;color:var(--c-accent);text-shadow:0 0 16px rgba(198,255,58,.4);}
-.msg{max-width:80%;font-size:var(--t-base);line-height:1.55;animation:msgIn .35s var(--ease-out) both;}
-.msg .who{font-family:var(--f-mono);font-size:9px;letter-spacing:var(--ls-wider);text-transform:uppercase;color:var(--c-ink-3);margin-bottom:var(--sp-2);}
+.msg{max-width:90%;font-size:var(--t-base);line-height:1.6;animation:msgIn .35s var(--ease-out) both;}
+.msg .who{font-family:var(--f-mono);font-size:10px;letter-spacing:var(--ls-wider);text-transform:uppercase;color:var(--c-ink-3);margin-bottom:var(--sp-2);}
 .msg.speakeasy{align-self:flex-start;}
 .msg.speakeasy .who{color:var(--c-accent);}
-.msg.speakeasy .body{font-family:var(--f-display);font-size:clamp(1.15rem,2.1vw,1.5rem);font-weight:500;line-height:1.3;letter-spacing:var(--ls-tight);white-space:pre-wrap;}
+.msg.speakeasy .body{font-family:var(--f-display);font-size:clamp(1.2rem,1.6vw,1.45rem);font-weight:500;line-height:1.4;letter-spacing:var(--ls-tight);white-space:pre-wrap;}
 .msg.you{align-self:flex-end;text-align:right;}
-.msg.you .body{background:var(--c-surface);border:1px solid var(--c-line);border-radius:12px 12px 3px 12px;padding:var(--sp-3) var(--sp-4);font-size:var(--t-sm);color:var(--c-ink-2);white-space:pre-wrap;display:inline-block;text-align:left;}
+.msg.you .body{background:var(--c-surface);border:1px solid var(--c-line);border-radius:12px 12px 3px 12px;padding:var(--sp-3) var(--sp-4);font-size:var(--t-base);color:var(--c-ink);white-space:pre-wrap;display:inline-block;text-align:left;}
 .msg .body strong{color:var(--c-accent);font-weight:700;}
 @keyframes msgIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 
 /* ── dock (record stage) ── */
-.dock{padding:var(--sp-4) 0 var(--sp-6);border-top:1px solid var(--c-line);display:flex;flex-direction:column;align-items:center;gap:var(--sp-3);}
-.wave{width:100%;max-width:520px;height:60px;}
+.dock{padding:var(--sp-3) 0 52px;border-top:1px solid var(--c-line);display:flex;flex-direction:column;align-items:center;gap:var(--sp-2);}
+.wave{width:100%;max-width:520px;height:44px;}
 .wave canvas{width:100%;height:100%;display:block;}
 .dock-main{display:flex;flex-direction:column;align-items:center;gap:var(--sp-3);}
-.recbtn{width:92px;height:92px;border-radius:50%;border:2px solid var(--c-accent);background:radial-gradient(circle at 50% 40%,rgba(198,255,58,.16),rgba(198,255,58,.02));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--c-accent);transition:transform var(--dur-fast),box-shadow var(--dur-base);}
-.recbtn .ic{width:32px;height:32px;}
+.recbtn{width:76px;height:76px;border-radius:50%;border:2px solid var(--c-accent);background:radial-gradient(circle at 50% 40%,rgba(198,255,58,.16),rgba(198,255,58,.02));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--c-accent);transition:transform var(--dur-fast),box-shadow var(--dur-base);}
+.recbtn .ic{width:26px;height:26px;}
 .recbtn span{font-family:var(--f-mono);font-size:9px;letter-spacing:var(--ls-wide);text-transform:uppercase;color:var(--c-accent);}
 .recbtn:not(:disabled):hover{transform:scale(1.03);}
 @media (prefers-reduced-motion:no-preference){ .recbtn:not(:disabled){animation:recglow 2.4s ease-in-out infinite;} }
@@ -329,22 +332,44 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     </details>
 
     <details class="grp">
-      <summary>API key &amp; model</summary>
-      <div class="field">
-        <label>Gemini API key (stored only in this browser)</label>
-        <div class="keyfield-row"><input type="password" id="apiKey" placeholder="Paste your key here" autocomplete="off" /><button id="testBtn" class="btn" type="button">Test</button></div>
-        <div class="testmsg" id="testMsg"></div>
-        <label class="check" style="margin-top:var(--sp-2)"><input type="checkbox" id="rememberKey" checked /> Remember key on this device</label>
-        <div class="hint">Free key: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. <a href="#" id="clearKey">Clear key now</a>.</div>
-      </div>
-      <div class="field"><label>Model</label>
-        <select id="model">
-          <option value="gemini-3.5-flash">gemini-3.5-flash (recommended, free)</option>
-          <option value="gemini-3.6-flash">gemini-3.6-flash (newest)</option>
-          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (fastest)</option>
-          <option value="gemini-flash-latest">gemini-flash-latest (auto newest)</option>
+      <summary>Provider, key &amp; model</summary>
+      <div class="field"><label>Provider</label>
+        <select id="provider">
+          <option value="gemini">Google Gemini (free tier now ~20/day)</option>
+          <option value="openrouter">OpenRouter (free ~50/day, 1000/day after one-time $10; many models)</option>
         </select>
       </div>
+      <div id="geminiFields">
+        <div class="field">
+          <label>Gemini API key (stored only in this browser)</label>
+          <div class="keyfield-row"><input type="password" id="apiKey" placeholder="Paste your key here" autocomplete="off" /><button id="testBtn" class="btn" type="button">Test</button></div>
+          <div class="testmsg" id="testMsg"></div>
+          <div class="hint">Free key: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. <a href="#" id="clearKey">Clear key now</a>.</div>
+        </div>
+        <div class="field"><label>Gemini model</label>
+          <select id="model">
+            <option value="gemini-2.5-flash">gemini-2.5-flash (recommended, largest free tier)</option>
+            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (fastest, high throughput)</option>
+            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (newer lite model)</option>
+            <option value="gemini-3.5-flash">gemini-3.5-flash (newest, small free quota)</option>
+          </select>
+        </div>
+      </div>
+      <div id="orFields">
+        <div class="field">
+          <label>OpenRouter API key (stored only in this browser)</label>
+          <div class="keyfield-row"><input type="password" id="orKey" placeholder="sk-or-..." autocomplete="off" /><button id="orTestBtn" class="btn" type="button">Test</button></div>
+          <div class="testmsg" id="orTestMsg"></div>
+          <div class="hint">Free key (no card): <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>. Free models allow 20/min, 50/day (1000/day after a one-time $10 credit).</div>
+        </div>
+        <div class="field"><label>OpenRouter model</label>
+          <input type="text" id="orModel" list="orModelList" placeholder="a model id ending in :free" autocomplete="off" />
+          <datalist id="orModelList"></datalist>
+          <div class="hint">Suggestions are free models loaded live from OpenRouter. Browse all at <a href="https://openrouter.ai/models" target="_blank" rel="noopener">openrouter.ai/models</a>. Use an id ending in <b>:free</b> to stay free.</div>
+        </div>
+      </div>
+      <label class="check" style="margin-top:var(--sp-2)"><input type="checkbox" id="rememberKey" checked /> Remember key on this device</label>
+      <div class="field" style="margin-top:var(--sp-3)"><label>Daily request cap (top-bar meter)</label><input type="number" id="dailyCap" min="1" max="5000" step="1" /><div class="hint">The meter counts every request against this. For Gemini use your AI Studio RPD; for OpenRouter free use 50 (or 1000 if you bought $10 credit).</div></div>
     </details>
 
     <details class="grp">
