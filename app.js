@@ -29,15 +29,15 @@ applyTheme();
 const SPEAKEASY_PROMPT = [
 "You are SpeakEasy, a communications coach specialising in job interviews, public speaking, and everyday conversational confidence. You combine the direct, no-nonsense feedback style of a seasoned speech coach with the perceptiveness of someone who has helped hundreds of professionals find their voice.",
 "",
-"You run inside a browser voice tool. After each SPOKEN response you receive a block titled [MEASURED DELIVERY METRICS] computed from the user's real microphone audio: words-per-minute, pauses, energy drop at the end of speaking, pitch variety (monotone vs dynamic), uptalk, and an approximate verbal-crutch count. Base your Score section on these real numbers and cite specific values or moments. If the metrics include a 'Precise fillers (on-device Whisper)' line, treat those filler counts as accurate and cite them. If instead they say 'Approx verbal crutches', exact 'um'/'uh' may be undercounted, so if pauses are many or long, treat them as likely hesitation and say so. If a response is marked '[typed - no audio]', estimate delivery and label those two scores '(estimated)'.",
+"You run inside a browser voice tool. After each SPOKEN response you receive a block titled [MEASURED DELIVERY METRICS] computed from the user's real microphone audio: words-per-minute, pauses, energy drop at the end of speaking, pitch variety (monotone vs dynamic), uptalk, and an approximate verbal-crutch count. Base your Score section on these real numbers and cite specific values or moments. If the metrics include a 'Precise fillers (on-device Whisper)' line, treat those filler counts as accurate and cite them. If instead they say 'Approx verbal crutches', exact 'um'/'uh' may be undercounted, so if pauses are many or long, treat them as likely hesitation and say so. GRADING BOUNDARY: only a message that includes a [MEASURED DELIVERY METRICS] block is a practice answer to grade. A message tagged [COMMAND] is an instruction, never an answer (for example 'roleplay mode', 'coach mode', 'break', 'new prompt', 'retry', changing the role or topic, or any request directed at you): do what it asks, reply in one or two short sentences, and never output a Score section or any X/10 numbers for it. If a spoken message is clearly an instruction rather than an answer, treat it as a command too and do not grade it.",
 "",
 "COACHING PRIORITIES (in order every session): 1) Filler words - flag 'um','uh','like','you know','sort of','basically' or equivalent crutches. 2) Pacing - rushing or stalling; anchor to the moment. Ideal pace ~110-150 wpm; over ~170 rushing, under ~95 dragging; factor long pauses. 3) Clarity - does the point land within the first two sentences? 4) Confidence and vocal presence - hedging language and weak qualifiers, plus the audio metrics for dropped energy at sentence ends, monotone delivery, and uptalk.",
 "",
 "FEEDBACK STYLE: Balanced - acknowledge what worked before what needs fixing. Never pad with empty praise. Be specific.",
 "",
-"MODES: COACH MODE (default) - give a prompt, then after their answer deliver the debrief, then ask retry-or-new. ROLEPLAY MODE (user activates) - adopt the requested persona; stay in character until the user says 'break' or 'coach mode', then immediately deliver the debrief. Never blend modes without the user's command.",
+"MODES: COACH MODE (default) - give a prompt, then after their answer deliver the debrief, then ask retry-or-new. ROLEPLAY MODE (user activates) - adopt the requested persona; stay in character until the user says 'break' or 'coach mode', then immediately deliver the debrief. Keep every in-character roleplay reply short and complete (2 to 4 sentences); never stop mid-sentence. Never blend modes without the user's command.",
 "",
-"SESSION DEBRIEF FORMAT (after every response, in either mode) - you MUST use exactly these score labels so the tool can track them:",
+"SESSION DEBRIEF FORMAT (only after a spoken practice answer in coach mode, or when the user says 'break'/'coach mode' to end a roleplay; NEVER for a [COMMAND]) - you MUST use exactly these score labels so the tool can track them:",
 "**Score**",
 "- Filler words: X/10",
 "- Pacing: X/10",
@@ -61,7 +61,7 @@ const SPEAKEASY_PROMPT = [
 ].join("\n");
 
 /* ── State ── */
-let history = [], busy = false, lastMeasured = null;
+let history = [], busy = false, lastMeasured = null, lastUserWasCommand = false;
 let lastPlayBuffer=null, playCtx=null, playingEl=null, lastWa=null;
 let sessionLog=[], lastAnswer="", lastQuestionText="";
 
@@ -73,9 +73,12 @@ function mdLite(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(
 function addMsg(who, text){
   const e=$("emptyState"); if(e) e.remove();
   const d=document.createElement("div"); d.className="msg "+(who==="speakeasy"?"speakeasy":"you");
-  d.innerHTML='<div class="who">'+(who==="speakeasy"?"SpeakEasy":"You")+'</div>'+mdLite(text);
+  d.innerHTML='<div class="who">'+(who==="speakeasy"?"SpeakEasy":"You")+'</div><div class="body">'+mdLite(text)+'</div>';
   logEl.appendChild(d); logEl.scrollTop=logEl.scrollHeight;
+  return d.querySelector(".body");
 }
+function bumpUsage(){ const day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} if(u.date!==day) u={date:day,count:0}; u.count=(u.count||0)+1; localStorage.setItem("speakeasy_usage",JSON.stringify(u)); renderUsage(); }
+function renderUsage(){ const el=$("usage"); if(!el) return; const cap=1500, day=new Date().toISOString().slice(0,10); let u; try{u=JSON.parse(localStorage.getItem("speakeasy_usage")||"{}");}catch(e){u={};} const n=(u.date===day)?(u.count||0):0; el.textContent="API "+n+"/"+cap; el.style.color=n>cap*0.9?"var(--c-danger)":(n>cap*0.7?"var(--c-amber)":"var(--c-ink-3)"); el.title="Approx Gemini free-tier usage today (~"+cap+" requests/day, resets daily Pacific time). Counted locally on this device."; }
 
 /* ── Icons (inline SVG, no emoji) ── */
 const ICONS={
@@ -131,38 +134,52 @@ function speak(text){
 }
 
 /* ── Gemini ── */
-async function callGemini(){
+async function callGemini(onDelta){
   if(!cfg.apiKey){ showBanner("Add your Gemini API key in Settings to begin.",true); return null; }
-  const url="https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(cfg.model)+":generateContent";
+  const url="https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(cfg.model)+":streamGenerateContent?alt=sse";
   const body={ system_instruction:{parts:[{text:SPEAKEASY_PROMPT}]},
     contents:history.map(h=>({role:h.role,parts:[{text:h.text}]})),
-    generationConfig:{temperature:0.75,maxOutputTokens:900} };
+    generationConfig:{temperature:0.75,maxOutputTokens:2048} };
   let res;
   try{ res=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":cfg.apiKey},body:JSON.stringify(body)}); }
-  catch(e){ showBanner("Network error reaching Gemini. If you opened this file directly, try the local-server method in Settings. ("+e.message+")",true); return null; }
+  catch(e){ showBanner("Network error reaching Gemini. ("+e.message+")",true); return null; }
   if(!res.ok){
     let d=""; try{ const j=await res.json(); d=j.error&&j.error.message?j.error.message:JSON.stringify(j); }catch(e){ d=res.statusText; }
-    if(res.status===429) showBanner("Gemini free-tier limit hit (429). Free Flash caps requests-per-minute, tokens-per-minute, and requests-per-day; tripping any one triggers this. Wait a minute, or switch model in Settings. "+d,true);
+    if(res.status===429) showBanner("Gemini free-tier limit reached (429): requests-per-minute or per-day. Wait about a minute, or check the API meter in the top bar. "+d,true);
     else if(res.status===400&&/API key/i.test(d)) showBanner("Invalid API key. Re-check it in Settings. "+d,true);
     else showBanner("Gemini error "+res.status+": "+d,true);
     return null;
   }
-  hideBanner();
-  const data=await res.json(); const cand=data.candidates&&data.candidates[0];
-  if(!cand){ const b=data.promptFeedback&&data.promptFeedback.blockReason; showBanner("SpeakEasy returned no answer"+(b?" (blocked: "+b+")":"")+". Try rephrasing.",true); return null; }
-  const parts=cand.content&&cand.content.parts?cand.content.parts:[];
-  return parts.map(p=>p.text||"").join("").trim()||"(empty response)";
+  hideBanner(); bumpUsage();
+  let full="", blocked="";
+  try{
+    const reader=res.body.getReader(), decoder=new TextDecoder(); let buf="";
+    while(true){ const {done,value}=await reader.read(); if(done) break; buf+=decoder.decode(value,{stream:true});
+      let nl; while((nl=buf.indexOf("\n"))>=0){ const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+        if(!line.startsWith("data:")) continue; const js=line.slice(5).trim(); if(!js||js==="[DONE]") continue;
+        try{ const obj=JSON.parse(js); const cand=obj.candidates&&obj.candidates[0];
+          if(cand&&cand.content&&cand.content.parts){ const t=cand.content.parts.map(p=>p.text||"").join(""); if(t){ full+=t; if(onDelta) onDelta(full); } }
+          if(obj.promptFeedback&&obj.promptFeedback.blockReason) blocked=obj.promptFeedback.blockReason;
+        }catch(e){}
+      }
+    }
+  }catch(e){ if(!full){ showBanner("Streaming error: "+e.message,true); return null; } }
+  full=full.trim();
+  if(!full){ showBanner("SpeakEasy returned no answer"+(blocked?" (blocked: "+blocked+")":"")+". Try rephrasing.",true); return null; }
+  return full;
 }
 
 async function speakeasyTurn(){
   if(busy) return; busy=true; setBusy(true); setStatus("thinking…");
-  const text=await callGemini(); setStatus("");
+  const bodyEl=addMsg("speakeasy","");
+  const text=await callGemini((t)=>{ bodyEl.innerHTML=mdLite(t); logEl.scrollTop=logEl.scrollHeight; });
+  setStatus("");
   if(text){
-    history.push({role:"model",text}); addMsg("speakeasy",text); speak(text);
+    bodyEl.innerHTML=mdLite(text); history.push({role:"model",text}); speak(text);
     const sc=parseScores(text);
-    if(sc){ recordProgress(sc); sessionLog.push({q:lastQuestionText,a:lastAnswer,debrief:text,m:lastMeasured}); $("drawer").classList.add("open"); switchTab("turn"); }
+    if(sc && !lastUserWasCommand){ recordProgress(sc); sessionLog.push({q:lastQuestionText,a:lastAnswer,debrief:text,m:lastMeasured}); $("drawer").classList.add("open"); switchTab("turn"); }
     lastQuestionText=text;
-  }
+  } else { const msg=bodyEl.parentElement; if(msg&&msg.parentElement) msg.parentElement.removeChild(msg); }
   busy=false; setBusy(false);
 }
 function setBusy(b){ ["startBtn","micBtn","newBtn","retryBtn","sendBtn","typeInput"].forEach(id=>{$(id).disabled=b;}); if(!b) enableAfterStart(); }
@@ -562,19 +579,19 @@ async function stopSpeaking(){
   }
   if(!transcript){ setStatus("didn't catch anything, try again."); return; }
   const m=computeMetrics(transcript, wa); lastMeasured=m; renderMetrics(m); renderTranscript(wa,m);
-  switchTab(wa?"tx":"turn"); setStatus("");
+  switchTab(wa?"tx":"turn"); setStatus(""); lastUserWasCommand=false;
   await sendUserTurn(transcript, transcript+"\n\n"+metricsToText(m));
 }
 $("micBtn").addEventListener("click",()=>{ recognizing?stopSpeaking():startSpeaking(); });
 
 /* ── Buttons ── */
 function enableAfterStart(){ if(!history.length) return; ["micBtn","newBtn","retryBtn","sendBtn","typeInput","reportBtn"].forEach(id=>{$(id).disabled=false;}); $("startBtn").disabled=true; }
-$("startBtn").addEventListener("click",async()=>{ if(!cfg.apiKey){ showOnboard(true); return; } $("startBtn").disabled=true; sessionLog=[]; lastQuestionText=""; lastAnswer=""; history=[{role:"user",text:"[BEGIN SESSION]"+practiceContext()}]; await speakeasyTurn(); enableAfterStart(); });
-$("newBtn").addEventListener("click",async()=>{ if(busy) return; await sendUserTurn("(new prompt, please)","Give me a new prompt/question to respond to."); });
-$("retryBtn").addEventListener("click",async()=>{ if(busy) return; await sendUserTurn("(I'll retry the same one)","Let me retry the same prompt. Give me the same one again."); });
+$("startBtn").addEventListener("click",async()=>{ if(!cfg.apiKey){ showOnboard(true); return; } $("startBtn").disabled=true; sessionLog=[]; lastQuestionText=""; lastAnswer=""; lastUserWasCommand=true; history=[{role:"user",text:"[BEGIN SESSION]"+practiceContext()}]; await speakeasyTurn(); enableAfterStart(); });
+$("newBtn").addEventListener("click",async()=>{ if(busy) return; lastUserWasCommand=true; await sendUserTurn("(new prompt, please)","[COMMAND] Give me a new prompt to respond to. Do not grade this; just give the prompt."); });
+$("retryBtn").addEventListener("click",async()=>{ if(busy) return; lastUserWasCommand=true; await sendUserTurn("(I'll retry the same one)","[COMMAND] Repeat the same prompt so I can retry. Do not grade this."); });
 $("sendBtn").addEventListener("click",sendTyped);
 $("typeInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") sendTyped(); });
-async function sendTyped(){ const v=$("typeInput").value.trim(); if(!v||busy) return; $("typeInput").value=""; const m=computeMetrics(v,null); lastMeasured=m; renderMetrics(m); renderTranscript(null,m); await sendUserTurn(v, v+"\n\n"+metricsToText(m)); }
+async function sendTyped(){ const v=$("typeInput").value.trim(); if(!v||busy) return; $("typeInput").value=""; lastUserWasCommand=true; await sendUserTurn(v, v+"\n\n[COMMAND] This is an instruction, not a practice answer. Act on it, reply briefly, and do not output any Score."); }
 
 /* ── Session report ── */
 function repText(s){ return mdLite(s||"").replace(/\n/g,"<br>"); }
@@ -695,6 +712,6 @@ $("settingsClose").addEventListener("click",()=>$("settingsModal").classList.rem
 $("settingsModal").addEventListener("click",(e)=>{ if(e.target===$("settingsModal")) $("settingsModal").classList.remove("show"); });
 
 /* ── Init ── */
-initIcons(); applyCfg(); renderProgress(); initWave(); setStatus("");
+initIcons(); applyCfg(); renderProgress(); initWave(); renderUsage(); setStatus("");
 if(!SR) showBanner("This tool needs <b>Google Chrome</b> (or Edge) on desktop for speech recognition.",true);
 else if(!cfg.apiKey) showOnboard(true);
