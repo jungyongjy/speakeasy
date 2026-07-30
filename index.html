@@ -234,6 +234,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     <span class="brand">SPEAK<b>EASY</b> <span class="brk">// STUDIO</span></span>
     <div class="topbar-center">
       <span class="recpill" id="recPill"><span class="recdot"></span><span id="recTime">REC 00:00</span></span>
+      <span id="usage" title="Gemini free-tier usage today"></span>
       <span id="statusMini">booting</span>
     </div>
     <div class="topbar-right">
@@ -265,7 +266,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
         <button id="reportBtn" class="btn" disabled>Report</button>
       </div>
       <div class="typerow">
-        <input type="text" id="typeInput" placeholder="or type a command / answer (e.g. roleplay mode: interviewer)" disabled />
+        <input type="text" id="typeInput" placeholder="type a command, e.g. 'roleplay mode: interviewer' or 'coach mode' (answers are spoken)" disabled />
         <button id="sendBtn" class="btn" disabled>Send</button>
       </div>
       <div class="status" id="status"></div>
