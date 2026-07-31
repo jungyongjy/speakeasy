@@ -18,7 +18,6 @@ const cfg = {
   whisper: localStorage.getItem("speakeasy_whisper") !== "0",
   whisperModel: localStorage.getItem("speakeasy_whisperModel") || "Xenova/whisper-base.en",
   voice: localStorage.getItem("speakeasy_voice") || "",
-  ttsProvider: localStorage.getItem("speakeasy_ttsProvider") || "browser",
   ttsRate: parseFloat(localStorage.getItem("speakeasy_ttsRate") || "1.0"),
   theme: localStorage.getItem("speakeasy_theme") || "light",
   role: localStorage.getItem("speakeasy_role") || "",
@@ -121,36 +120,10 @@ function buildHeroWave(){ const el=$("heroWave"); if(!el) return;
 }
 
 /* ── TTS ── */
-/* ── Hardcoded Edge TTS neural voices ── */
-var EDGE_VOICES = [
-  {name:"en-US-AriaNeural",label:"Aria (US female)",lang:"en-US",quality:"neural"},
-  {name:"en-US-JennyNeural",label:"Jenny (US female)",lang:"en-US",quality:"neural"},
-  {name:"en-US-GuyNeural",label:"Guy (US male)",lang:"en-US",quality:"neural"},
-  {name:"en-US-AnaNeural",label:"Ana (US female)",lang:"en-US",quality:"neural"},
-  {name:"en-US-MichelleNeural",label:"Michelle (US female)",lang:"en-US",quality:"neural"},
-  {name:"en-US-EricNeural",label:"Eric (US male)",lang:"en-US",quality:"neural"},
-  {name:"en-US-ChristopherNeural",label:"Christopher (US male)",lang:"en-US",quality:"neural"},
-  {name:"en-US-DavisNeural",label:"Davis (US male)",lang:"en-US",quality:"neural"},
-  {name:"en-US-JaneNeural",label:"Jane (US female)",lang:"en-US",quality:"neural"},
-  {name:"en-US-JasonNeural",label:"Jason (US male)",lang:"en-US",quality:"neural"},
-  {name:"en-US-NancyNeural",label:"Nancy (US female)",lang:"en-US",quality:"neural"},
-  {name:"en-US-SaraNeural",label:"Sara (US female)",lang:"en-US",quality:"neural"},
-  {name:"en-US-TonyNeural",label:"Tony (US male)",lang:"en-US",quality:"neural"},
-  {name:"en-GB-SoniaNeural",label:"Sonia (UK female)",lang:"en-GB",quality:"neural"},
-  {name:"en-GB-RyanNeural",label:"Ryan (UK male)",lang:"en-GB",quality:"neural"},
-  {name:"en-GB-LibbyNeural",label:"Libby (UK female)",lang:"en-GB",quality:"neural"},
-  {name:"en-GB-MaisieNeural",label:"Maisie (UK female)",lang:"en-GB",quality:"neural"},
-  {name:"en-AU-NatashaNeural",label:"Natasha (AU female)",lang:"en-AU",quality:"neural"},
-  {name:"en-AU-WilliamNeural",label:"William (AU male)",lang:"en-AU",quality:"neural"},
-  {name:"en-IN-NeerjaNeural",label:"Neerja (IN female)",lang:"en-IN",quality:"neural"},
-  {name:"en-IN-PrabhatNeural",label:"Prabhat (IN male)",lang:"en-IN",quality:"neural"}
-];
-let voices=[], cloudVoices={edge:EDGE_VOICES.map(function(v){ return {name:v.name,lang:v.lang,label:v.label,quality:v.quality,__source:"cloud",__provider:"edge"}; })}, audioEl=null;
+let voices=[];
 function voiceScore(v){
   const n=(v.name||"").toLowerCase(); let s=0;
-  if(v.__source==="cloud"){ s+=120; if(v.quality==="neural") s+=30; }
   if(/natural|neural/.test(n)) s+=100;
-  if(/google/.test(n)) s+=50;
   if(/online/.test(n)) s+=40;
   if(/(aria|jenny|guy|libby|sonia|ryan|emma|michelle|ava|andrew)/.test(n)) s+=20;
   if(/microsoft/.test(n)) s+=15;
@@ -160,90 +133,31 @@ function voiceScore(v){
 }
 function loadVoices(){
   voices = window.speechSynthesis ? speechSynthesis.getVoices() : [];
-  Object.values(cloudVoices).forEach(function(cv){ if(Array.isArray(cv)) voices=voices.concat(cv); });
   renderVoiceSelect();
 }
 function renderVoiceSelect(){
-  const prov=cfg.ttsProvider||"browser";
-  const filtered=voices.filter(function(v){
-    if(!v.lang||!v.lang.toLowerCase().startsWith("en")) return false;
-    if(prov==="browser") return !v.__source;
-    if(prov==="edge") return v.__source==="cloud"&&v.__provider==="edge";
-    return true;
-  }).sort(function(a,b){ return voiceScore(b)-voiceScore(a); });
-  const sel=voiceSel; if(!sel) return; sel.innerHTML="";
-  if(!filtered.length){ sel.innerHTML="<option>No voices for this provider</option>"; return; }
-  const hasCurrentVoice=filtered.some(function(v){ return v.name===cfg.voice; });
-  if(!hasCurrentVoice && filtered.length) cfg.voice=filtered[0].name;
-  filtered.forEach(function(v,i){ const o=document.createElement("option"); o.value=v.name;
-    const source=v.__source==="cloud"?" (AI)":"";
-    const tag=i===0?" (recommended)":"";
-    o.textContent=(v.label||v.name)+" ("+(v.lang||"en-US")+")"+source+tag;
+  const en=voices.filter(function(v){ return v.lang&&v.lang.toLowerCase().startsWith("en"); }).sort(function(a,b){ return voiceScore(b)-voiceScore(a); });
+  if(!cfg.voice && en.length) cfg.voice=en[0].name;
+  const sel=$("voiceSel"); if(!sel) return; sel.innerHTML="";
+  if(!en.length){ sel.innerHTML="<option>Loading voices…</option>"; return; }
+  const hasCurrentVoice=en.some(function(v){ return v.name===cfg.voice; });
+  if(!hasCurrentVoice && en.length) cfg.voice=en[0].name;
+  en.forEach(function(v,i){ const o=document.createElement("option"); o.value=v.name;
+    const isNeural=/natural|neural|online/.test((v.name||"").toLowerCase());
+    const tag=isNeural?" (natural)":(i===0?" (recommended)":"");
+    o.textContent=v.name+" ("+v.lang+")"+tag;
     if(v.name===cfg.voice) o.selected=true; sel.appendChild(o); });
 }
 if(window.speechSynthesis){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; }
 function speak(text){
   if(!cfg.tts) return;
-  const clean=text.replace(/\*\*/g,"").replace(/[#*_>-]/g," ").replace(/\s+/g," ").trim();
+  const clean=text.replace(/**/g,"").replace(/[#*_`>-]/g," ").replace(/s+/g," ").trim();
   if(!clean) return;
-  speechSynthesis.cancel();
-  if(cfg.ttsProvider==="edge"){ speakEdge(clean); } else { speakBrowser(clean); }
-}
-function speakBrowser(clean){
   if(!window.speechSynthesis) return;
+  speechSynthesis.cancel();
   const u=new SpeechSynthesisUtterance(clean);
   const v=voices.find(function(x){ return x.name===cfg.voice; }); if(v) u.voice=v;
   u.rate=cfg.ttsRate||1.0; speechSynthesis.speak(u);
-}
-function escapeXml(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/""/g,"&quot;").replace(/'/g,"&apos;"); }
-function speakEdge(text){
-  var voice=cfg.voice||"en-US-AriaNeural";
-  var rateVal=(cfg.ttsRate||1.0)-1.0;
-  var prosodyRate=rateVal>=0?"+"+Math.round(rateVal*100)+"%":Math.round(rateVal*100)+"%";
-  var ssml="<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='"+voice.slice(0,5)+"'><voice name='"+voice+"'><prosody rate='"+prosodyRate+"' pitch='+0Hz'>"+escapeXml(text)+"</prosody></voice></speak>";
-  // Step 1: Get anonymous auth token from Microsoft
-  fetch("https://edge.microsoft.com/translate/auth",{headers:{"User-Agent":navigator.userAgent}})
-    .then(function(r){ if(!r.ok) throw new Error("Token fetch failed ("+r.status+")"); return r.text(); })
-    .then(function(token){
-      return new Promise(function(resolve,reject){
-        var wsUrl="wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken="+encodeURIComponent(token);
-        var ws=new WebSocket(wsUrl);
-        var audioChunks=[],done=false;
-        var timer=setTimeout(function(){ if(!done){ done=true; try{ws.close();}catch(e){} reject(new Error("Edge TTS timed out")); } },15000);
-        ws.onopen=function(){
-          ws.send(JSON.stringify({context:{synthesis:{audio:{metadataoptions:{sentenceBoundaryEnabled:"false",wordBoundaryEnabled:"false"},outputFormat:"audio-24khz-48kbitrate-mono-mp3"}}}}));
-          ws.send(ssml);
-        };
-        ws.onmessage=function(e){
-          if(typeof e.data==="string"){ if(e.data.indexOf("turn.end")>=0){ done=true; clearTimeout(timer); ws.close(); } return; }
-          var d=new Uint8Array(e.data),p=0;
-          if(p+2>d.length) return; var hl=((d[p]<<8)|d[p+1])>>>0; p+=2+hl;
-          if(p+2>d.length) return; var sl=((d[p]<<8)|d[p+1])>>>0; p+=2+sl;
-          if(p+2>d.length) return; var pl=((d[p]<<8)|d[p+1])>>>0; p+=2+pl;
-          if(p<d.length) audioChunks.push(d.slice(p));
-        };
-        ws.onerror=function(){ if(!done){ done=true; clearTimeout(timer); reject(new Error("Edge TTS WebSocket error")); } };
-        ws.onclose=function(){
-          if(done) return; done=true; clearTimeout(timer);
-          if(!audioChunks.length){ reject(new Error("No audio received from Edge TTS")); return; }
-          var tl=audioChunks.reduce(function(s,c){return s+c.length;},0);
-          var comb=new Uint8Array(tl),off=0;
-          audioChunks.forEach(function(c){ comb.set(c,off); off+=c.length; });
-          resolve(new Blob([comb],{type:"audio/mpeg"}));
-        };
-      });
-    })
-    .then(function(blob){
-      if(!audioEl){ audioEl=document.createElement("audio"); audioEl.setAttribute("preload","auto"); document.body.appendChild(audioEl); }
-      audioEl.pause(); audioEl.currentTime=0;
-      audioEl.src=URL.createObjectURL(blob);
-      var p=audioEl.play();
-      if(p) p.catch(function(){ console.warn("Edge TTS: autoplay blocked"); speakBrowser(text); });
-    })
-    .catch(function(err){
-      console.warn("Edge TTS failed, falling back to browser:",err.message);
-      speakBrowser(text);
-    });
 }
 
 /* ── Gemini ── */
@@ -944,7 +858,7 @@ function showOnboard(s){ if(s&&$("obProvider")){ $("obProvider").value=cfg.provi
 
 /* ── Settings ── */
 function applyCfg(){
-  $("apiKey").value=cfg.apiKey; $("model").value=cfg.model; $("ttsOn").checked=cfg.tts; $("audioOn").checked=cfg.audio; if($("ttsProvider")) $("ttsProvider").value=cfg.ttsProvider; if($("ttsRate")) $("ttsRate").value=cfg.ttsRate;
+  $("apiKey").value=cfg.apiKey; $("model").value=cfg.model; $("ttsOn").checked=cfg.tts; $("audioOn").checked=cfg.audio; if($("ttsRate")) $("ttsRate").value=cfg.ttsRate;
   $("whisperOn").checked=cfg.whisper; $("whisperModel").value=cfg.whisperModel; $("rememberKey").checked=cfg.rememberKey;
   $("roleInput").value=cfg.role; $("seniorityInput").value=cfg.seniority; $("jdInput").value=cfg.jd;
   $("goalFillers").value=cfg.goalFillers; $("paceMin").value=cfg.paceMin; $("paceMax").value=cfg.paceMax;
@@ -953,14 +867,14 @@ function applyCfg(){
   updateProviderUI(); updateTtsUI();
 }
 $("saveBtn").addEventListener("click",()=>{
-  cfg.model=$("model").value; cfg.tts=$("ttsOn").checked; cfg.audio=$("audioOn").checked; cfg.voice=$("voiceSel").value; cfg.ttsProvider=$("ttsProvider")?$("ttsProvider").value:"browser"; cfg.ttsRate=parseFloat($("ttsRate").value||"1.0");
+  cfg.model=$("model").value; cfg.tts=$("ttsOn").checked; cfg.audio=$("audioOn").checked; cfg.voice=$("voiceSel").value; cfg.ttsRate=parseFloat($("ttsRate").value||"1.0");
   const prevWM=cfg.whisperModel; cfg.whisper=$("whisperOn").checked; cfg.whisperModel=$("whisperModel").value; if(cfg.whisperModel!==prevWM) asrPipe=null;
   storeKey($("apiKey").value.trim(), $("rememberKey").checked);
   cfg.provider=$("provider").value; localStorage.setItem("speakeasy_provider",cfg.provider);
   storeORKey($("orKey").value.trim(), $("rememberKey").checked);
   cfg.orModel=$("orModel").value.trim(); localStorage.setItem("speakeasy_orModel",cfg.orModel);
   localStorage.setItem("speakeasy_model",cfg.model);
-  localStorage.setItem("speakeasy_tts",cfg.tts?"1":"0"); localStorage.setItem("speakeasy_audio",cfg.audio?"1":"0"); localStorage.setItem("speakeasy_voice",cfg.voice); localStorage.setItem("speakeasy_ttsProvider",cfg.ttsProvider); localStorage.setItem("speakeasy_ttsRate",cfg.ttsRate);
+  localStorage.setItem("speakeasy_tts",cfg.tts?"1":"0"); localStorage.setItem("speakeasy_audio",cfg.audio?"1":"0"); localStorage.setItem("speakeasy_voice",cfg.voice); localStorage.setItem("speakeasy_ttsRate",cfg.ttsRate);
   localStorage.setItem("speakeasy_whisper",cfg.whisper?"1":"0"); localStorage.setItem("speakeasy_whisperModel",cfg.whisperModel);
   cfg.goalFillers=Math.max(0,+$("goalFillers").value||3); cfg.paceMin=+$("paceMin").value||110; cfg.paceMax=+$("paceMax").value||150;
   cfg.capGemini=Math.max(1,+$("capGemini").value||20); localStorage.setItem("speakeasy_capGemini",cfg.capGemini);
@@ -1034,21 +948,18 @@ $("settingsClose").addEventListener("click",()=>$("settingsModal").classList.rem
 $("settingsModal").addEventListener("click",(e)=>{ if(e.target===$("settingsModal")) $("settingsModal").classList.remove("show"); });
 
 /* ── TTS settings UI ── */
-function updateTtsUI(){
-  const prov=$("ttsProvider")?$("ttsProvider").value:"browser";
-  const hint=$("ttsHint");
-  if(hint){
-    if(prov==="browser") hint.innerHTML='Voices from your browser. <b>Tip:</b> use Microsoft Edge on Windows for free natural neural voices &mdash; select Edge above.';
-    else if(prov==="edge") hint.innerHTML='Microsoft Edge neural voices &mdash; free, no API key, no quota. Connects directly from your browser to Microsoft. Falls back to browser voices if Edge TTS is unreachable.';
+function updateTtsHint(){
+  const hint=$("ttsHint"); if(!hint) return;
+  const ua=navigator.userAgent;
+  if(/Edg/.test(ua)){
+    hint.innerHTML="You're on Microsoft Edge &mdash; natural neural voices appear in the dropdown above (marked <b>natural</b>).";
+  } else {
+    hint.innerHTML="<b>For natural AI voices, open SpeakEasy in Microsoft Edge.</b> It's free, built into Windows, and uses the same engine as Chrome. Your current browser only has robotic offline voices.";
   }
-  const rl=$("rateLabel"); if(rl) rl.textContent=($("ttsRate")?parseFloat($("ttsRate").value).toFixed(2):"1.0")+"&times;";
-  cfg.ttsProvider=prov;
-  loadVoices();
-  setTimeout(function(){ const c=document.querySelectorAll("#voiceSel option").length; const vc=$("voiceCount"); if(vc) vc.textContent="("+c+" voices)"; },200);
 }
-if($("ttsProvider")) $("ttsProvider").addEventListener("change",updateTtsUI);
 if($("ttsRate")) $("ttsRate").addEventListener("input",function(){ const rl=$("rateLabel"); if(rl) rl.textContent=parseFloat(this.value).toFixed(2)+"&times;"; });
-$("settingsBtn").addEventListener("click",function(){ setTimeout(function(){ updateTtsUI(); },200); });
+$("settingsBtn").addEventListener("click",function(){ setTimeout(function(){ const c=document.querySelectorAll("#voiceSel option").length; const vc=$("voiceCount"); if(vc) vc.textContent="("+c+" voices)"; updateTtsHint(); },300); });
+setTimeout(updateTtsHint,500);
 
 /* ── Init ── */
 /* ── Mode chips + keyboard shortcut ── */

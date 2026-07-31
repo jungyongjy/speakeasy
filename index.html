@@ -467,15 +467,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     <details class="grp">
       <summary>Voice &amp; analysis</summary>
       <div class="field"><label class="check"><input type="checkbox" id="ttsOn" checked /> SpeakEasy speaks responses aloud</label></div>
-      <div class="field"><label>TTS engine</label>
-        <select id="ttsProvider">
-          <option value="browser">Browser built-in (offline, works everywhere)</option>
-          <option value="edge">Microsoft Edge neural (free, no key, natural voices)</option>
-        </select>
-        <div class="hint" id="ttsHint"></div>
-      </div>
       <div class="field"><label>Voice <span id="voiceCount"></span></label><select id="voiceSel"></select></div>
       <div class="field"><label>Speech rate: <span id="rateLabel">1.0&times;</span></label><input type="range" id="ttsRate" min="0.5" max="2.0" step="0.05" value="1.0" /></div>
+      <div class="hint" id="ttsHint"></div>
       <div class="field"><label class="check"><input type="checkbox" id="audioOn" checked /> Analyse my real voice (energy, pitch, pauses)</label></div>
       <div class="field"><label class="check"><input type="checkbox" id="whisperOn" checked /> Precise filler detection (on-device Whisper)</label>
         <select id="whisperModel"><option value="Xenova/whisper-base.en">whisper-base.en (accurate, ~145 MB)</option><option value="Xenova/whisper-tiny.en">whisper-tiny.en (faster, ~40 MB)</option></select>
