@@ -1,4 +1,4 @@
-# SpeakEasy — Voice Interview & Speaking Coach
+# SpeakEasy: Voice Interview & Speaking Coach
 
 A single-page, client-side voice coaching studio. It asks you interview questions, listens to your spoken answers, measures your real delivery, detects fillers with on-device Whisper, and gives grounded AI coaching with progress tracking over time.
 
