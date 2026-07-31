@@ -151,7 +151,7 @@ function renderVoiceSelect(){
 if(window.speechSynthesis){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; }
 function speak(text){
   if(!cfg.tts) return;
-  const clean=text.replace(/**/g,"").replace(/[#*_`>-]/g," ").replace(/s+/g," ").trim();
+  const clean=text.replace(/\*\*/g,"").replace(/[#*_`>-]/g," ").replace(/\s+/g," ").trim();
   if(!clean) return;
   if(!window.speechSynthesis) return;
   speechSynthesis.cancel();
@@ -864,7 +864,7 @@ function applyCfg(){
   $("goalFillers").value=cfg.goalFillers; $("paceMin").value=cfg.paceMin; $("paceMax").value=cfg.paceMax;
   if($("capGemini")) $("capGemini").value=cfg.capGemini; if($("capOR")) $("capOR").value=cfg.capOR;
   if($("provider")) $("provider").value=cfg.provider; if($("orKey")) $("orKey").value=cfg.orKey; if($("orModel")) $("orModel").value=cfg.orModel;
-  updateProviderUI(); updateTtsUI();
+  updateProviderUI(); updateTtsHint();
 }
 $("saveBtn").addEventListener("click",()=>{
   cfg.model=$("model").value; cfg.tts=$("ttsOn").checked; cfg.audio=$("audioOn").checked; cfg.voice=$("voiceSel").value; cfg.ttsRate=parseFloat($("ttsRate").value||"1.0");
