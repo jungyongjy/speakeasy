@@ -8,6 +8,7 @@ const cfg = {
   capGemini: +(localStorage.getItem("speakeasy_capGemini")||localStorage.getItem("speakeasy_dailyCap")||20),
   capOR: +(localStorage.getItem("speakeasy_capOR")||50),
   mode: localStorage.getItem("speakeasy_mode")||"coach",
+  drillMode: localStorage.getItem("speakeasy_drillMode")||"topics",
   scenario: localStorage.getItem("speakeasy_scenario")||"",
   provider: localStorage.getItem("speakeasy_provider") || "gemini",
   orKey: localStorage.getItem("speakeasy_orKey") || sessionStorage.getItem("speakeasy_orKey") || "",
@@ -285,10 +286,25 @@ async function generateQuestions(){
 const LOCAL_QUESTIONS={
   general:["Walk me through your background in about ninety seconds.","Why are you interested in this role?","What are your greatest strengths, and how do they show up at work?","Where do you want to grow over the next few years?","Why are you looking to leave your current role?"],
   behavioral:["Tell me about a time you handled a difficult stakeholder. What did you do and what was the result?","Describe a situation where you missed a deadline. How did you handle it?","Give an example of a time you led a project without formal authority.","Tell me about a mistake you made at work and what you learned.","Describe a time you had to persuade someone who disagreed with you."],
-  presentation:["Give a two minute overview of a project you are proud of.","Explain a complex idea from your field to someone outside it.","Pitch an idea you believe your team should invest in.","Summarise the most important trend affecting your industry.","Introduce yourself as if opening a conference talk."]
+  presentation:["Give a two minute overview of a project you are proud of.","Explain a complex idea from your field to someone outside it.","Pitch an idea you believe your team should invest in.","Summarise the most important trend affecting your industry.","Introduce yourself as if opening a conference talk."],
+  /* non-technical drill topics — accessible to any audience */
+  impromptu:["Describe your ideal weekend morning from start to finish.","If you could have dinner with any person, living or dead, who would it be and why?","What is a skill you would love to learn and why does it interest you?","Describe a place that makes you feel at peace.","What is the best piece of advice you have ever received?","If you could live anywhere in the world for a year, where would you go?","What does a perfect day look like to you?","Describe your favourite season and what you love about it.","If you could instantly master one thing, what would it be?","What is a small kindness someone did for you that you still remember?","What is a tradition from your childhood that you still think about?","If you had an extra hour every day, how would you spend it?","Describe a sound or smell that instantly takes you back to a memory.","What is something you have changed your mind about in the last few years?","If you could give your younger self one piece of advice, what would it be?"],
+  story:["Tell me about a time something did not go as planned.","Describe the funniest thing that has happened to you recently.","Tell me about a time you felt really proud of yourself.","Describe a moment when you had to be brave.","Tell me a story about a memorable meal you had.","Describe a time you got completely lost.","Tell me about the first time you tried something and failed.","Describe a moment when someone surprised you.","Tell me about a time you helped a stranger.","Describe the best decision you ever made on a whim.","Tell me about a time you laughed so hard you could not stop.","Describe a moment that felt like it was straight out of a movie."],
+  opinion:["What makes a good listener?","Is it better to be early or late? Defend your answer.","What is one thing about modern life that you think people will miss in fifty years?","Should people work to live or live to work?","What is more important: being liked or being respected?","Is it better to have a plan or to go with the flow?","What makes someone a good friend?","Do you think luck or hard work matters more? Why?","What is a common piece of advice you disagree with?","What does it mean to be successful?","Is it better to be busy or bored?","What is one habit everyone should have?"],
+  explain:["Explain how to make a cup of tea or coffee to someone who has never done it.","Describe how to wrap a gift neatly.","Explain how to plant something and help it grow.","Describe how to choose a good book when you do not know what to read.","Explain how to apologise and mean it.","Describe how to make a small room feel bigger.","Explain how to plan a surprise for someone.","Describe how to stay calm in a stressful moment.","Explain how to give constructive feedback to a friend.","Describe how to make a first impression that lasts."],
+  persuasive:["Convince me to try a food I think I hate.","Convince me to take up your favourite hobby.","Persuade me to visit your hometown or favourite city.","Convince me that mornings are better than evenings.","Persuade me to spend less time on my phone.","Convince me to watch your favourite film without spoiling it.","Argue that pets make people happier.","Convince me that boredom is good for you.","Persuade me to learn a second language.","Argue that walking is the best form of exercise."]
 };
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
-function fillLocalBank(){ const pool=LOCAL_QUESTIONS.general.concat(LOCAL_QUESTIONS.behavioral,LOCAL_QUESTIONS.presentation); questionBank=shuffle(pool.slice()); }
+function fillLocalBank(){
+  if(cfg.mode==="drill" && cfg.drillMode==="topics"){
+    const drillCats=["impromptu","story","opinion","explain","persuasive"];
+    const pool=drillCats.flatMap(function(k){ return LOCAL_QUESTIONS[k]||[]; });
+    questionBank=shuffle(pool.slice());
+  } else {
+    const pool=LOCAL_QUESTIONS.general.concat(LOCAL_QUESTIONS.behavioral,LOCAL_QUESTIONS.presentation);
+    questionBank=shuffle(pool.slice());
+  }
+}
 function nextQuestion(){ if(!questionBank.length) fillLocalBank(); return questionBank.shift(); }
 function showQuestion(text){ if(!text) return; lastQuestionText=text; addMsg("speakeasy",text); if(cfg.tts) speak(text); }
 
@@ -733,7 +749,8 @@ function setInSession(on){ inSession=on; const app=document.querySelector(".app"
 function enableAfterStart(){ if(!inSession) return;
   ["micBtn","endBtn","reportBtn","copyBtn"].forEach(id=>{const el=$(id); if(el)el.disabled=false;});
   const rp=cfg.mode==="roleplay", drill=cfg.mode==="drill";
-  $("newBtn").disabled=rp; $("retryBtn").disabled=false;
+  const freeDrill=drill && cfg.drillMode==="free";
+  $("newBtn").disabled=rp||freeDrill; $("retryBtn").disabled=freeDrill;
   $("typeInput").disabled=drill; $("sendBtn").disabled=drill;
 }
 $("startBtn").addEventListener("click",async()=>{
@@ -741,7 +758,11 @@ $("startBtn").addEventListener("click",async()=>{
   localStorage.setItem("speakeasy_mode",cfg.mode);
   sessionLog=[]; lastQuestionText=""; lastAnswer=""; lastUserWasCommand=false; history=[]; questionBank=[]; provOverride=null;
   setInSession(true);
-  if(cfg.mode==="drill"){ fillLocalBank(); showQuestion(nextQuestion()); enableAfterStart(); setStatus("drill mode: record for on-device metrics, no AI used."); return; }
+  if(cfg.mode==="drill"){
+    localStorage.setItem("speakeasy_drillMode",cfg.drillMode);
+    if(cfg.drillMode==="free"){ showQuestion("Free practice — press the mic and speak. Your fillers, pace, and voice metrics will appear here after each recording."); enableAfterStart(); setStatus("free practice: on-device metrics only."); return; }
+    fillLocalBank(); showQuestion(nextQuestion()); enableAfterStart(); setStatus("drill mode: record for on-device metrics, no AI used."); return;
+  }
   if(cfg.mode==="roleplay"){
     const scene=($("scenarioInput").value.trim())||cfg.scenario||"a realistic interviewer for the target role";
     cfg.scenario=scene; localStorage.setItem("speakeasy_scenario",scene);
@@ -920,13 +941,18 @@ $("settingsModal").addEventListener("click",(e)=>{ if(e.target===$("settingsModa
 /* ── Init ── */
 /* ── Mode chips + keyboard shortcut ── */
 function setMode(m){ cfg.mode=m; localStorage.setItem("speakeasy_mode",m);
-  ["Coach","Roleplay","Drill"].forEach(x=>{ const el=$("mode"+x); if(el) el.classList.toggle("active", el.getAttribute("data-mode")===m); });
-  const sc=$("scenarioInput"); if(sc) sc.style.display=(m==="roleplay")?"":"none";
+  ["Coach","Roleplay","Drill"].forEach(function(x){ var el=$("mode"+x); if(el) el.classList.toggle("active", el.getAttribute("data-mode")===m); });
+  var sc=$("scenarioInput"); if(sc) sc.style.display=(m==="roleplay")?"":"none";
+  var ds=$("drillSub"); if(ds) ds.style.display=(m==="drill")?"":"none";
 }
-[["modeCoach","coach"],["modeRoleplay","roleplay"],["modeDrill","drill"]].forEach(([id,m])=>{ const el=$(id); if(el) el.addEventListener("click",()=>setMode(m)); });
+function setDrillMode(m){ cfg.drillMode=m; localStorage.setItem("speakeasy_drillMode",m);
+  ["topics","free"].forEach(function(x){ var el=$("drill"+x.charAt(0).toUpperCase()+x.slice(1)); if(el) el.classList.toggle("active", x===m); });
+}
+[["modeCoach","coach"],["modeRoleplay","roleplay"],["modeDrill","drill"]].forEach(function(p){ var id=p[0],m=p[1]; var el=$(id); if(el) el.addEventListener("click",function(){ setMode(m); }); });
+[["drillTopics","topics"],["drillFree","free"]].forEach(function(p){ var id=p[0],m=p[1]; var el=$(id); if(el) el.addEventListener("click",function(){ setDrillMode(m); }); });
 document.addEventListener("keydown",(e)=>{ if(e.code!=="Space"||!inSession||busy) return; const t=e.target; if(t&&(t.tagName==="INPUT"||t.tagName==="TEXTAREA"||t.isContentEditable)) return; const mb=$("micBtn"); if(!mb||mb.disabled) return; e.preventDefault(); recognizing?stopSpeaking():startSpeaking(); });
 
 /* ── Init ── */
-initIcons(); applyCfg(); setMode(cfg.mode); renderProgress(); initWave(); renderUsage(); initDivider(); updateCmdline(); setStatus("");
+initIcons(); applyCfg(); setMode(cfg.mode); setDrillMode(cfg.drillMode); renderProgress(); initWave(); renderUsage(); initDivider(); updateCmdline(); setStatus("");
 if(!SR) showBanner("This tool needs <b>Google Chrome</b> (or Edge) on desktop for speech recognition.",true);
 else if(!activeKey()) showOnboard(true);
