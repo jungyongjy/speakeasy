@@ -3,13 +3,14 @@
  *
  * Proxies text-to-speech requests to Microsoft Edge TTS.
  * Edge TTS uses per-request anonymous tokens — no account, no API key, no quota.
+ * Internally uses WebSocket to Microsoft's speech platform.
  *
  * GET  /api/tts?action=voices&provider=edge
  * POST /api/tts  body: { provider: "edge", voice, text, rate?, pitch? }
  */
 
 /* ── Edge TTS English neural voices ── */
-const EDGE_VOICES = [
+var EDGE_VOICES = [
   { name: "en-US-AriaNeural", label: "Aria (US female)", lang: "en-US", quality: "neural" },
   { name: "en-US-JennyNeural", label: "Jenny (US female)", lang: "en-US", quality: "neural" },
   { name: "en-US-GuyNeural", label: "Guy (US male)", lang: "en-US", quality: "neural" },
@@ -42,69 +43,170 @@ function json(res, data, status) {
   res.status(status || 200).setHeader("Content-Type", "application/json").send(JSON.stringify(data));
 }
 
-/* ── Edge TTS ── */
-async function getEdgeToken() {
-  const r = await fetch("https://edge.microsoft.com/translate/auth", {
-    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edge/131.0.0.0" },
-  });
-  if (!r.ok) throw new Error("Edge token failed: " + r.status);
-  return r.text();
-}
-
+/* ── Edge TTS via WebSocket ── */
 function synthesizeEdge(req, res) {
-  const { voice, text, rate, pitch } = req.body || {};
+  var body = req.body || {};
+  var text = body.text;
   if (!text) return json(res, { error: "Missing 'text' field" }, 400);
 
-  const v = voice || "en-US-AriaNeural";
-  const prosodyRate = rate != null ? (rate >= 0 ? "+" + Math.round(rate * 100) + "%" : Math.round(rate * 100) + "%") : "+0%";
-  const prosodyPitch = pitch != null ? (pitch >= 0 ? "+" + Math.round(pitch) + "Hz" : Math.round(pitch) + "Hz") : "+0Hz";
+  var voice = body.voice || "en-US-AriaNeural";
+  var rateVal = body.rate != null ? body.rate : 0;
+  var prosodyRate = rateVal >= 0 ? "+" + Math.round(rateVal * 100) + "%" : Math.round(rateVal * 100) + "%";
+  var pitchVal = body.pitch != null ? body.pitch : 0;
+  var prosodyPitch = pitchVal >= 0 ? "+" + Math.round(pitchVal) + "Hz" : Math.round(pitchVal) + "Hz";
 
-  const ssml =
-    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="' + v.slice(0, 5) + '"><voice name="' + v + '"><prosody rate="' + prosodyRate + '" pitch="' + prosodyPitch + '">' + escapeXml(text) + '</prosody></voice></speak>';
-
-  getEdgeToken()
+  // Step 1: Get auth token
+  fetch("https://edge.microsoft.com/translate/auth", {
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edge/131.0.0.0" },
+  })
+    .then(function (tokenRes) {
+      if (!tokenRes.ok) throw new Error("Edge auth failed: " + tokenRes.status);
+      return tokenRes.text();
+    })
     .then(function (token) {
-      return fetch(
-        "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=" + encodeURIComponent(token),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/ssml+xml",
-            "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edge/131.0.0.0",
-          },
-          body: ssml,
-        }
-      );
-    })
-    .then(async function (ttsRes) {
-      if (!ttsRes.ok) {
-        var errText = await ttsRes.text().catch(function () { return ""; });
-        throw new Error("Edge TTS failed: " + ttsRes.status + " " + errText.slice(0, 200));
-      }
-      return ttsRes.arrayBuffer();
-    })
-    .then(function (buf) {
-      // Strip any non-MP3 prefix (Edge sometimes prepends headers like "Path:audio\r\n")
-      var data = new Uint8Array(buf);
-      var start = 0;
-      for (var i = 0; i < Math.min(data.length - 2, 256); i++) {
-        if (data[i] === 0xff && (data[i + 1] & 0xe0) === 0xe0) { start = i; break; }
-        if (i < data.length - 3 && data[i] === 0x49 && data[i + 1] === 0x44 && data[i + 2] === 0x33) { start = i; break; }
-      }
-      var clean = start > 0 ? data.slice(start) : data;
-      res.setHeader("Content-Type", "audio/mpeg");
-      res.setHeader("Content-Length", clean.length);
-      res.send(Buffer.from(clean));
+      return connectAndSynthesize(token, voice, prosodyRate, prosodyPitch, text, res);
     })
     .catch(function (err) {
       json(res, { error: err.message || "Edge TTS error" }, 502);
     });
 }
 
+function connectAndSynthesize(token, voice, prosodyRate, prosodyPitch, text, res) {
+  return new Promise(function (resolve, reject) {
+    var wsUrl = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=" + encodeURIComponent(token);
+
+    var ws;
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (e) {
+      return reject(new Error("WebSocket creation failed: " + e.message));
+    }
+
+    var audioChunks = [];
+    var receivedAudio = false;
+    var done = false;
+    var timer = setTimeout(function () {
+      if (!done) {
+        done = true;
+        try { ws.close(); } catch (e) { /* ignore */ }
+        if (!receivedAudio) reject(new Error("Edge TTS timed out after 15s with no audio"));
+      }
+    }, 15000);
+
+    ws.onopen = function () {
+      // Send config
+      var config = {
+        context: {
+          synthesis: {
+            audio: {
+              metadataoptions: { sentenceBoundaryEnabled: "false", wordBoundaryEnabled: "false" },
+              outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+            },
+          },
+        },
+      };
+      ws.send(JSON.stringify(config));
+
+      // Build and send SSML
+      var ssml =
+        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='" +
+        voice.slice(0, 5) +
+        "'><voice name='" +
+        voice +
+        "'><prosody rate='" +
+        prosodyRate +
+        "' pitch='" +
+        prosodyPitch +
+        "'>" +
+        escapeXml(text) +
+        "</prosody></voice></speak>";
+      ws.send(ssml);
+    };
+
+    ws.onmessage = function (event) {
+      if (typeof event.data === "string") {
+        // Text message — could be turn.start, turn.end, or error
+        if (event.data.indexOf("turn.end") >= 0 || event.data.indexOf("Path:turn.end") >= 0) {
+          done = true;
+          clearTimeout(timer);
+          try { ws.close(); } catch (e) { /* ignore */ }
+        }
+        return;
+      }
+
+      // Binary message — extract audio data
+      if (event.data instanceof ArrayBuffer || event.data instanceof Buffer || ArrayBuffer.isView(event.data)) {
+        var data;
+        if (event.data instanceof ArrayBuffer) {
+          data = new Uint8Array(event.data);
+        } else if (ArrayBuffer.isView(event.data)) {
+          data = new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength);
+        } else {
+          data = new Uint8Array(event.data);
+        }
+
+        if (data.length < 2) return;
+
+        // Parse binary frame header per edge-tts protocol:
+        // [2 bytes BE: headers_length] [header bytes]
+        // [2 bytes BE: stream_headers_length] [stream header bytes]
+        // [2 bytes BE: path_length] [path bytes]
+        // [...remaining: audio data]
+        var pos = 0;
+        var headerLen = ((data[pos] << 8) | data[pos + 1]) >>> 0;
+        pos += 2 + headerLen;
+        if (pos + 2 > data.length) return;
+        var streamHeaderLen = ((data[pos] << 8) | data[pos + 1]) >>> 0;
+        pos += 2 + streamHeaderLen;
+        if (pos + 2 > data.length) return;
+        var pathLen = ((data[pos] << 8) | data[pos + 1]) >>> 0;
+        pos += 2 + pathLen;
+        if (pos >= data.length) return;
+
+        var audioData = data.slice(pos);
+        if (audioData.length > 0) {
+          audioChunks.push(audioData);
+          receivedAudio = true;
+        }
+      }
+    };
+
+    ws.onerror = function (err) {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        reject(new Error("Edge TTS WebSocket error"));
+      }
+    };
+
+    ws.onclose = function () {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        if (!receivedAudio) {
+          reject(new Error("Edge TTS connection closed with no audio"));
+        } else {
+          // Send collected audio
+          var totalLength = audioChunks.reduce(function (sum, chunk) { return sum + chunk.length; }, 0);
+          var combined = new Uint8Array(totalLength);
+          var offset = 0;
+          audioChunks.forEach(function (chunk) {
+            combined.set(chunk, offset);
+            offset += chunk.length;
+          });
+
+          res.setHeader("Content-Type", "audio/mpeg");
+          res.setHeader("Content-Length", combined.length);
+          res.send(Buffer.from(combined));
+          resolve();
+        }
+      }
+    };
+  });
+}
+
 /* ── Main handler ── */
 export default function handler(req, res) {
-  // CORS headers (same-origin in production, but helps during local dev with different ports)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -118,11 +220,10 @@ export default function handler(req, res) {
 
     // GET /api/tts?action=voices&provider=edge
     if (req.method === "GET" && action === "voices") {
-      if (provider === "edge") return json(res, EDGE_VOICES);
-      return json(res, { edge: EDGE_VOICES });
+      return json(res, EDGE_VOICES);
     }
 
-    // POST /api/tts  body: { provider, voice, text, rate?, pitch? }
+    // POST /api/tts
     if (req.method === "POST") {
       if (!req.body) {
         var raw = "";
