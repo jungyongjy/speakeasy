@@ -119,36 +119,88 @@ function buildHeroWave(){ const el=$("heroWave"); if(!el) return;
 }
 
 /* ── TTS ── */
-let voices=[];
+let voices=[], cloudVoices={edge:[], google:[]}, audioEl=null;
 function voiceScore(v){
   const n=(v.name||"").toLowerCase(); let s=0;
+  if(v.__source==="cloud"){ s+=120; if(v.quality==="neural") s+=30; }
   if(/natural|neural/.test(n)) s+=100;
   if(/google/.test(n)) s+=50;
   if(/online/.test(n)) s+=40;
-  if(/(aria|jenny|guy|libby|sonia|ryan|emma|michelle|ava|andrew)/.test(n)) s+=20;
+  if(/(aria|jenny|guy|libby|sonia|ryan|emma|michelle|ava|andrew|chirp|wavenet)/.test(n)) s+=20;
   if(/microsoft/.test(n)) s+=15;
   if(v.localService===false) s+=10;
   if(v.lang==="en-US") s+=6; else if(v.lang==="en-GB") s+=5;
   return s;
 }
+async function fetchCloudVoices(provider){
+  if(provider==="browser") return;
+  const cacheKey="speakeasy_cloudVoices_"+provider;
+  const cached=sessionStorage.getItem(cacheKey);
+  if(cached){ try{ cloudVoices[provider]=JSON.parse(cached); return; }catch(e){} }
+  try{
+    let url="/api/tts?action=voices&provider="+provider;
+    if(provider==="google"&&cfg.googleTtsKey) url+="&key="+encodeURIComponent(cfg.googleTtsKey);
+    const r=await fetch(url); if(!r.ok) return;
+    const list=await r.json();
+    const vv=list.map(function(v){ return {name:v.name,lang:v.lang||"en-US",label:v.label||v.name,quality:v.quality||"neural",__source:"cloud",__provider:provider}; });
+    cloudVoices[provider]=vv;
+    try{sessionStorage.setItem(cacheKey,JSON.stringify(vv));}catch(e){}
+  }catch(e){ /* offline or function not deployed yet */ }
+}
 function loadVoices(){
   voices = window.speechSynthesis ? speechSynthesis.getVoices() : [];
-  const en=voices.filter(v=>v.lang&&v.lang.toLowerCase().startsWith("en")).sort((a,b)=>voiceScore(b)-voiceScore(a));
+  Object.values(cloudVoices).forEach(function(cv){ if(Array.isArray(cv)) voices=voices.concat(cv); });
+  renderVoiceSelect();
+}
+function renderVoiceSelect(){
+  const en=voices.filter(function(v){ return v.lang&&v.lang.toLowerCase().startsWith("en"); }).sort(function(a,b){ return voiceScore(b)-voiceScore(a); });
   if(!cfg.voice && en.length) cfg.voice=en[0].name;
-  const sel=$("voiceSel"); sel.innerHTML="";
-  en.forEach((v,i)=>{ const o=document.createElement("option"); o.value=v.name;
-    const tag=voiceScore(v)>=100?" (natural)":(i===0?" (recommended)":"");
-    o.textContent=v.name+" ("+v.lang+")"+tag;
+  const sel=voiceSel; if(!sel) return; sel.innerHTML="";
+  en.forEach(function(v,i){ const o=document.createElement("option"); o.value=v.name;
+    const source=v.__source==="cloud"?" (AI)":"";
+    const tag=i===0?" (recommended)":"";
+    o.textContent=(v.label||v.name)+" ("+(v.lang||"en-US")+")"+source+tag;
     if(v.name===cfg.voice) o.selected=true; sel.appendChild(o); });
 }
 if(window.speechSynthesis){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; }
+function initCloudVoices(){
+  if(cfg.ttsProvider==="edge"||cfg.ttsProvider==="google") fetchCloudVoices(cfg.ttsProvider).then(function(){ loadVoices(); });
+  fetchCloudVoices("edge");
+  if(cfg.googleTtsKey) fetchCloudVoices("google");
+}
+setTimeout(initCloudVoices,200);
 function speak(text){
-  if(!cfg.tts||!window.speechSynthesis) return;
+  if(!cfg.tts) return;
+  const clean=text.replace(/\*\*/g,"").replace(/[#*_>-]/g," ").replace(/\s+/g," ").trim();
+  if(!clean) return;
   speechSynthesis.cancel();
-  const clean=text.replace(/\*\*/g,"").replace(/[#*_`>-]/g," ").replace(/\s+/g," ").trim();
+  if(cfg.ttsProvider==="edge"||cfg.ttsProvider==="google"){ speakCloud(clean); } else { speakBrowser(clean); }
+}
+function speakBrowser(clean){
+  if(!window.speechSynthesis) return;
   const u=new SpeechSynthesisUtterance(clean);
-  const v=voices.find(x=>x.name===cfg.voice); if(v) u.voice=v;
-  u.rate=1.02; speechSynthesis.speak(u);
+  const v=voices.find(function(x){ return x.name===cfg.voice; }); if(v) u.voice=v;
+  u.rate=cfg.ttsRate||1.0; speechSynthesis.speak(u);
+}
+function speakCloud(text){
+  if(!audioEl){ audioEl=document.createElement("audio"); audioEl.setAttribute("preload","auto"); document.body.appendChild(audioEl); }
+  audioEl.pause(); audioEl.currentTime=0;
+  const prov=cfg.ttsProvider;
+  const body={provider:prov, voice:cfg.voice, text:text, rate:(cfg.ttsRate||1.0)-1.0};
+  if(prov==="google"&&cfg.googleTtsKey) body.key=cfg.googleTtsKey;
+  fetch("/api/tts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+    .then(async function(r){
+      if(!r.ok){ const err=await r.json().catch(function(){return{};}); throw new Error(err.error||"TTS fetch failed ("+r.status+")"); }
+      return r.blob();
+    })
+    .then(function(blob){
+      audioEl.src=URL.createObjectURL(blob);
+      audioEl.play().catch(function(){});
+    })
+    .catch(function(err){
+      console.warn("Cloud TTS failed, falling back to browser:",err.message);
+      speakBrowser(text);
+    });
 }
 
 /* ── Gemini ── */
@@ -849,23 +901,23 @@ function showOnboard(s){ if(s&&$("obProvider")){ $("obProvider").value=cfg.provi
 
 /* ── Settings ── */
 function applyCfg(){
-  $("apiKey").value=cfg.apiKey; $("model").value=cfg.model; $("ttsOn").checked=cfg.tts; $("audioOn").checked=cfg.audio;
+  $("apiKey").value=cfg.apiKey; $("model").value=cfg.model; $("ttsOn").checked=cfg.tts; $("audioOn").checked=cfg.audio; if($("ttsProvider")) $("ttsProvider").value=cfg.ttsProvider; if($("ttsRate")) $("ttsRate").value=cfg.ttsRate; if($("googleTtsKey")) $("googleTtsKey").value=cfg.googleTtsKey;
   $("whisperOn").checked=cfg.whisper; $("whisperModel").value=cfg.whisperModel; $("rememberKey").checked=cfg.rememberKey;
   $("roleInput").value=cfg.role; $("seniorityInput").value=cfg.seniority; $("jdInput").value=cfg.jd;
   $("goalFillers").value=cfg.goalFillers; $("paceMin").value=cfg.paceMin; $("paceMax").value=cfg.paceMax;
   if($("capGemini")) $("capGemini").value=cfg.capGemini; if($("capOR")) $("capOR").value=cfg.capOR;
   if($("provider")) $("provider").value=cfg.provider; if($("orKey")) $("orKey").value=cfg.orKey; if($("orModel")) $("orModel").value=cfg.orModel;
-  updateProviderUI();
+  updateProviderUI(); updateTtsUI();
 }
 $("saveBtn").addEventListener("click",()=>{
-  cfg.model=$("model").value; cfg.tts=$("ttsOn").checked; cfg.audio=$("audioOn").checked; cfg.voice=$("voiceSel").value;
+  cfg.model=$("model").value; cfg.tts=$("ttsOn").checked; cfg.audio=$("audioOn").checked; cfg.voice=$("voiceSel").value; cfg.ttsProvider=$("ttsProvider")?$("ttsProvider").value:"browser"; cfg.ttsRate=parseFloat($("ttsRate").value||"1.0"); cfg.googleTtsKey=$("googleTtsKey").value.trim();
   const prevWM=cfg.whisperModel; cfg.whisper=$("whisperOn").checked; cfg.whisperModel=$("whisperModel").value; if(cfg.whisperModel!==prevWM) asrPipe=null;
   storeKey($("apiKey").value.trim(), $("rememberKey").checked);
   cfg.provider=$("provider").value; localStorage.setItem("speakeasy_provider",cfg.provider);
   storeORKey($("orKey").value.trim(), $("rememberKey").checked);
   cfg.orModel=$("orModel").value.trim(); localStorage.setItem("speakeasy_orModel",cfg.orModel);
   localStorage.setItem("speakeasy_model",cfg.model);
-  localStorage.setItem("speakeasy_tts",cfg.tts?"1":"0"); localStorage.setItem("speakeasy_audio",cfg.audio?"1":"0"); localStorage.setItem("speakeasy_voice",cfg.voice);
+  localStorage.setItem("speakeasy_tts",cfg.tts?"1":"0"); localStorage.setItem("speakeasy_audio",cfg.audio?"1":"0"); localStorage.setItem("speakeasy_voice",cfg.voice); localStorage.setItem("speakeasy_ttsProvider",cfg.ttsProvider); localStorage.setItem("speakeasy_ttsRate",cfg.ttsRate); if(cfg.googleTtsKey) localStorage.setItem("speakeasy_googleTtsKey",cfg.googleTtsKey); else localStorage.removeItem("speakeasy_googleTtsKey");
   localStorage.setItem("speakeasy_whisper",cfg.whisper?"1":"0"); localStorage.setItem("speakeasy_whisperModel",cfg.whisperModel);
   cfg.goalFillers=Math.max(0,+$("goalFillers").value||3); cfg.paceMin=+$("paceMin").value||110; cfg.paceMax=+$("paceMax").value||150;
   cfg.capGemini=Math.max(1,+$("capGemini").value||20); localStorage.setItem("speakeasy_capGemini",cfg.capGemini);
@@ -938,6 +990,30 @@ $("settingsBtn").addEventListener("click",()=>{ applyCfg(); $("settingsModal").c
 $("settingsClose").addEventListener("click",()=>$("settingsModal").classList.remove("show"));
 $("settingsModal").addEventListener("click",(e)=>{ if(e.target===$("settingsModal")) $("settingsModal").classList.remove("show"); });
 
+/* ── TTS settings UI ── */
+function updateTtsUI(){
+  const prov=$("ttsProvider")?$("ttsProvider").value:"browser";
+  const gf=$("googleKeyField"); if(gf) gf.style.display=prov==="google"?"":"none";
+  const hint=$("ttsHint");
+  if(hint){
+    if(prov==="browser") hint.innerHTML='Voices depend on your browser. <b>Tip:</b> use Microsoft Edge on Windows for free natural neural voices.';
+    else if(prov==="edge") hint.innerHTML='Microsoft Edge neural voices &mdash; free, no API key, no quota. Voices load on first use. Falls back to browser voices if unreachable.';
+    else if(prov==="google") hint.innerHTML='Google Cloud Text-to-Speech &mdash; 1M neural chars/month free. <b>Stops automatically</b> when limit is reached. Needs a Google Cloud project with billing enabled.';
+  }
+  const rl=$("rateLabel"); if(rl) rl.textContent=($("ttsRate")?parseFloat($("ttsRate").value).toFixed(2):"1.0")+"&times;";
+  const prov2=$("ttsProvider")?$("ttsProvider").value:"browser";
+  if(prov2==="edge"||prov2==="google"){
+    fetchCloudVoices(prov2).then(function(){ loadVoices(); });
+    setTimeout(function(){ const c=document.querySelectorAll("#voiceSel option").length; const vc=$("voiceCount"); if(vc) vc.textContent="("+c+" voices)"; },600);
+  }
+}
+if($("ttsProvider")) $("ttsProvider").addEventListener("change",updateTtsUI);
+if($("ttsRate")) $("ttsRate").addEventListener("input",function(){ const rl=$("rateLabel"); if(rl) rl.textContent=parseFloat(this.value).toFixed(2)+"&times;"; });
+// Update voice count when settings open
+$("settingsBtn").addEventListener("click",function(){ setTimeout(function(){ const c=document.querySelectorAll("#voiceSel option").length; const vc=$("voiceCount"); if(vc) vc.textContent="("+c+" voices)"; updateTtsUI(); },400); });
+
+
+
 /* ── Init ── */
 /* ── Mode chips + keyboard shortcut ── */
 function setMode(m){ cfg.mode=m; localStorage.setItem("speakeasy_mode",m);
@@ -952,7 +1028,6 @@ function setDrillMode(m){ cfg.drillMode=m; localStorage.setItem("speakeasy_drill
 [["drillTopics","topics"],["drillFree","free"]].forEach(function(p){ var id=p[0],m=p[1]; var el=$(id); if(el) el.addEventListener("click",function(){ setDrillMode(m); }); });
 document.addEventListener("keydown",(e)=>{ if(e.code!=="Space"||!inSession||busy) return; const t=e.target; if(t&&(t.tagName==="INPUT"||t.tagName==="TEXTAREA"||t.isContentEditable)) return; const mb=$("micBtn"); if(!mb||mb.disabled) return; e.preventDefault(); recognizing?stopSpeaking():startSpeaking(); });
 
-/* ── Init ── */
 initIcons(); applyCfg(); setMode(cfg.mode); setDrillMode(cfg.drillMode); renderProgress(); initWave(); renderUsage(); initDivider(); updateCmdline(); setStatus("");
 if(!SR) showBanner("This tool needs <b>Google Chrome</b> (or Edge) on desktop for speech recognition.",true);
 else if(!activeKey()) showOnboard(true);

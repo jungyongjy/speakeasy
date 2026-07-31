@@ -466,7 +466,21 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 
     <details class="grp">
       <summary>Voice &amp; analysis</summary>
-      <div class="field"><label class="check"><input type="checkbox" id="ttsOn" checked /> SpeakEasy speaks responses aloud</label><select id="voiceSel"></select></div>
+      <div class="field"><label class="check"><input type="checkbox" id="ttsOn" checked /> SpeakEasy speaks responses aloud</label></div>
+      <div class="field"><label>TTS engine</label>
+        <select id="ttsProvider">
+          <option value="browser">Browser built-in (offline, works everywhere)</option>
+          <option value="edge">Microsoft Edge neural (free, no key, natural voices)</option>
+          <option value="google">Google Cloud TTS (free tier: 1M chars/month, needs key)</option>
+        </select>
+        <div class="hint" id="ttsHint"></div>
+      </div>
+      <div class="field" id="googleKeyField" style="display:none"><label>Google Cloud API key</label>
+        <input type="password" id="googleTtsKey" placeholder="Paste your Google Cloud API key" autocomplete="off" />
+        <div class="hint">Create at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">console.cloud.google.com</a>. Enable the Text-to-Speech API. Free tier: 1M neural chars/month. <b>Stops when limit hit — no surprise bills.</b></div>
+      </div>
+      <div class="field"><label>Voice <span id="voiceCount"></span></label><select id="voiceSel"></select></div>
+      <div class="field"><label>Speech rate: <span id="rateLabel">1.0&times;</span></label><input type="range" id="ttsRate" min="0.5" max="2.0" step="0.05" value="1.0" /></div>
       <div class="field"><label class="check"><input type="checkbox" id="audioOn" checked /> Analyse my real voice (energy, pitch, pauses)</label></div>
       <div class="field"><label class="check"><input type="checkbox" id="whisperOn" checked /> Precise filler detection (on-device Whisper)</label>
         <select id="whisperModel"><option value="Xenova/whisper-base.en">whisper-base.en (accurate, ~145 MB)</option><option value="Xenova/whisper-tiny.en">whisper-tiny.en (faster, ~40 MB)</option></select>
@@ -481,7 +495,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     </details>
 
     <div class="modal-actions"><button id="saveBtn" class="btn btn-primary" type="button">Save settings</button></div>
-    <div class="hint" style="margin-top:var(--sp-3)">Best in <b>Chrome</b> on desktop. Run via the deployed HTTPS URL or <code>python -m http.server 8000</code> then <code>http://localhost:8000/</code>.</div>
+    <div class="hint" style="margin-top:var(--sp-3)">Best in <b>Chrome</b> or <b>Edge</b> on desktop. Edge has free natural neural voices (Settings &rarr; Voice). Run via the deployed HTTPS URL or <code>python -m http.server 8000</code> then <code>http://localhost:8000/</code>.</div>
   </div>
 </div>
 
