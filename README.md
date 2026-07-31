@@ -11,7 +11,9 @@ Everything runs in the browser. Audio never leaves your machine (Whisper runs lo
 ### Three practice modes
 - **Coach** — AI asks tailored questions (optionally based on your target role + job description), then scores your delivery on filler words, pacing, clarity, and confidence. Adds a STAR structure score for behavioural questions.
 - **Roleplay** — AI adopts a persona (e.g. "a skeptical hiring manager for a PM role"). You stay in character until you say "break," then you get a full coaching debrief.
-- **Drill** — On-device metrics only. No AI calls. Unlimited use. Great for filler-word drills or warming up.
+- **Drill** — On-device metrics only. No AI calls. Unlimited use. Two sub-modes:
+  - **Random topics** — Serves a random non-technical prompt from a bank of 177 topics across five categories (Impromptu, Storytelling, Opinion, Explain, Persuasive). You answer and get voice metrics. Press "New prompt" for another topic. All prompts are accessible to any audience — no technical knowledge assumed.
+  - **Free practice** — No topics served. Just press the mic, speak, and see your filler count, pace, energy, and pitch after each recording. Great for filler-word drills, warming up, or practising a talk you already know.
 
 ### Real voice metrics (no server needed)
 Captured from your microphone in real time:
